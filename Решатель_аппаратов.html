@@ -160,15 +160,34 @@
       <h3>Резервуар (бак-аккумулятор)</h3>
       <div class="row3">
         <div><label>C, кДж/К</label><input id="l_Cres" type="number" value="15000"></div>
-        <div><label>UA в среду, кВт/К</label><input id="l_UAamb" type="number" value="9"></div>
+        <div><label>UA в среду, кВт/К</label><input id="l_UAamb" type="number" value="5"></div>
         <div><label>T среды, °C</label><input id="l_Tamb" type="number" value="20"></div>
       </div>
 
-      <h3>Утилизатор тепла <span class="note" style="display:inline">(дымовой газ → масло → в атмосферу)</span></h3>
+      <h3>Утилизатор тепла HRU <span class="note" style="display:inline">(дымовой газ → масло → в атмосферу)</span></h3>
       <div class="row3">
         <div><label>T газа вход, °C</label><input id="l_Thin" type="number" value="585"></div>
         <div><label>Расход газа, кг/с</label><input id="l_mGas" type="number" value="20"></div>
         <div><label>UA, кВт/К</label><input id="l_UA" type="number" value="8"></div>
+      </div>
+
+      <h3><label style="display:inline"><input type="checkbox" id="l_fhe_on" checked style="width:auto"> Печной теплообменник FHE</label> <span class="note" style="display:inline">(газ → масло)</span></h3>
+      <div class="row3">
+        <div><label>T газа вход, °C</label><input id="l_fhe_Thin" type="number" value="700"></div>
+        <div><label>Расход газа, кг/с</label><input id="l_fhe_mGas" type="number" value="20"></div>
+        <div><label>UA, кВт/К</label><input id="l_fhe_UA" type="number" value="7"></div>
+      </div>
+
+      <h3><label style="display:inline"><input type="checkbox" id="l_eoh_on" checked style="width:auto"> Огневой подогрев EOH</label> <span class="note" style="display:inline">(электро → масло)</span></h3>
+      <div class="row">
+        <div><label>Мощность, кВт</label><input id="l_eoh_Power" type="number" value="180"></div>
+      </div>
+
+      <h3><label style="display:inline"><input type="checkbox" id="l_load_on" checked style="width:auto"> Потребитель тепла</label> <span class="note" style="display:inline">(масло → процесс)</span></h3>
+      <div class="row3">
+        <div><label>T процесса вход, °C</label><input id="l_load_Tp" type="number" value="150"></div>
+        <div><label>C процесса, кВт/К</label><input id="l_load_C" type="number" value="26"></div>
+        <div><label>UA, кВт/К</label><input id="l_load_UA" type="number" value="28"></div>
       </div>
 
       <h3>Схема решения (нагрев контура)</h3>
@@ -469,97 +488,127 @@ function runChain(){
 }
 
 /* ===================== ЗАМКНУТЫЙ КОНТУР МАСЛА =====================
-   Резервуар → Насос → Утилизатор тепла (дымовой газ → масло) → Резервуар.
-   Дымовой газ после отдачи тепла выбрасывается в атмосферу.
-   Это задача с рециклом: рвём контур tear-потоком (T резервуара) и сходимся
-   под-релаксацией (§2.5). Равновесие: тепло от газа = потери резервуара в среду. */
+   Резервуар → Насос → нагреватели (HRU/FHE — газ→масло, EOH — электро) →
+   потребитель тепла (масло→процесс) → Резервуар. Дымовые газы после отдачи
+   тепла выбрасываются в атмосферу. Это задача с рециклом: рвём контур
+   tear-потоком (T резервуара) и сходимся под-релаксацией (§2.5).
+   Равновесие: подвод тепла + насос = отбор потребителя + потери в среду. */
 function loopParams(){
-  const f=id=>parseFloat(el(id).value);
-  return {Toil0:f('l_Toil0'),mOil:f('l_mOil'),useCp:el('l_cp').value==='1',
+  const f=id=>parseFloat(el(id).value), on=id=>el(id).checked;
+  const P={Toil0:f('l_Toil0'),mOil:f('l_mOil'),useCp:el('l_cp').value==='1',
     dPpump:f('l_dPpump'),etaPump:f('l_etaPump'),
     Cres:f('l_Cres'),UAamb:f('l_UAamb'),Tamb:f('l_Tamb'),
-    Thin:f('l_Thin'),mGas:f('l_mGas'),UA:f('l_UA')};
+    hru:{Thin:f('l_Thin'),mGas:f('l_mGas'),UA:f('l_UA')}};
+  P.fhe = on('l_fhe_on') ?{Thin:f('l_fhe_Thin'),mGas:f('l_fhe_mGas'),UA:f('l_fhe_UA')}:null;
+  P.eoh = on('l_eoh_on') ?{Power:f('l_eoh_Power')}:null;
+  P.load= on('l_load_on')?{Tp:f('l_load_Tp'),C:f('l_load_C'),UA:f('l_load_UA')}:null;
+  return P;
 }
 function loopCp(P,Tc){return P.useCp?oilCp(Tc+273.15):2.0;}
-// согласованный ε-NTU для утилизатора в контуре: cp масла фиксирован (тот же, что в балансе
-// резервуара), cp газа — при его собственной средней температуре. Это гарантирует точное
-// замыкание энергобаланса «тепло газа = тепло маслу» (в отличие от общего hxNTU, где cp масла
-// берётся при средней газ-масло температуре и даёт ~3% расхождение).
-function hxLoop(P,T1,cpOil){
-  const ThiK=P.Thin+273.15, TciK=T1+273.15, Cc=P.mOil*cpOil;
-  let Tg=P.Thin-30, q=0, T2=T1+40;
+// согласованный ε-NTU газового нагревателя в контуре: cp масла фиксирован (тот же, что в балансе
+// резервуара), cp газа — при его собственной средней температуре. Это гарантирует точное замыкание
+// энергобаланса «тепло газа = тепло маслу» (в отличие от общего hxNTU, где cp масла берётся при
+// средней газ-масло температуре и даёт ~3% расхождение). Масло — холодная сторона.
+function hxHeat(h,Tin,cpOil,mOil){
+  const ThiK=h.Thin+273.15, TciK=Tin+273.15, Cc=mOil*cpOil;
+  let Tg=h.Thin-30, q=0, Tout=Tin+40;
   for(let it=0;it<8;it++){
-    const Ch=P.mGas*gasCp((ThiK+Tg+273.15)/2);
-    const Cmin=Math.max(Math.min(Ch,Cc),TINY),Cmax=Math.max(Ch,Cc),Cr=Cmin/Cmax,NTU=P.UA/Cmin;
+    const Ch=h.mGas*gasCp((ThiK+Tg+273.15)/2);
+    const Cmin=Math.max(Math.min(Ch,Cc),TINY),Cmax=Math.max(Ch,Cc),Cr=Cmin/Cmax,NTU=h.UA/Cmin;
     const eps=Math.abs(1-Cr)<1e-6?NTU/(1+NTU):(1-Math.exp(-NTU*(1-Cr)))/(1-Cr*Math.exp(-NTU*(1-Cr)));
-    q=eps*Cmin*(ThiK-TciK); T2=T1+q/Cc; Tg=P.Thin-q/Ch;
+    q=eps*Cmin*(ThiK-TciK); Tout=Tin+q/Cc; Tg=h.Thin-q/Ch;
   }
-  return {T2,Qhru:q,Tgas_out:Tg};
+  return {Tout,Q:q,Tgas_out:Tg};
 }
-// один обход контура при температуре масла в резервуаре Tres (°C)
-function loopPass(P,Tres){
+// потребитель тепла: ε-NTU, масло — ГОРЯЧАЯ сторона, технологический процесс — холодная.
+// C — теплоёмкостный расход процесса (кВт/К). Отбор ограничен (масло не остынет ниже Tp).
+function hxLoad(L,Tin,cpOil,mOil){
+  const ThiK=Tin+273.15, TciK=L.Tp+273.15, Ch=mOil*cpOil, Cc=Math.max(L.C,TINY);
+  const Cmin=Math.max(Math.min(Ch,Cc),TINY),Cmax=Math.max(Ch,Cc),Cr=Cmin/Cmax,NTU=L.UA/Cmin;
+  const eps=Math.abs(1-Cr)<1e-6?NTU/(1+NTU):(1-Math.exp(-NTU*(1-Cr)))/(1-Cr*Math.exp(-NTU*(1-Cr)));
+  const q=eps*Cmin*(ThiK-TciK);
+  return {Tout:Tin-q/Ch, Q:q, Tproc_out:L.Tp+q/Cc};
+}
+// один обход контура при температуре масла в резервуаре Tres (°C): марш по станциям
+function loopMarch(P,Tres){
   const pr=oilProps(Tres+273.15), cp=loopCp(P,Tres);
   // насос: рассеиваемая часть мощности (1-КПД) идёт в подогрев масла (обычно доли градуса)
   const pumpPow=P.dPpump>0?P.dPpump*P.mOil/pr.rho:0;                 // кВт (P[кПа]·m[кг/с]/ρ)
   const dTpump=pumpPow>0?pumpPow*(1-P.etaPump)/Math.max(P.mOil*cp,TINY):0;
-  const T1=Tres+dTpump;                                              // вход в утилизатор
-  const r=hxLoop(P,T1,cp);
-  return {T1,T2:r.T2,dTpump,pumpPow,Qhru:r.Qhru,Tgas_out:r.Tgas_out};
+  let T=Tres+dTpump; const steps=[];
+  let r=hxHeat(P.hru,T,cp,P.mOil);
+  steps.push({key:'HRU',label:'Утилизатор HRU',kind:'gas',Tin:T,Tout:r.Tout,Q:r.Q,gas_in:P.hru.Thin,gas_out:r.Tgas_out}); T=r.Tout;
+  if(P.fhe){r=hxHeat(P.fhe,T,cp,P.mOil);
+    steps.push({key:'FHE',label:'Печной FHE',kind:'gas',Tin:T,Tout:r.Tout,Q:r.Q,gas_in:P.fhe.Thin,gas_out:r.Tgas_out}); T=r.Tout;}
+  if(P.eoh){const q=P.eoh.Power, Tout=T+q/Math.max(P.mOil*cp,TINY);
+    steps.push({key:'EOH',label:'Огневой EOH',kind:'elec',Tin:T,Tout,Q:q}); T=Tout;}
+  if(P.load){r=hxLoad(P.load,T,cp,P.mOil);
+    steps.push({key:'LOAD',label:'Потребитель',kind:'load',Tin:T,Tout:r.Tout,Q:r.Q,proc_in:P.load.Tp,proc_out:r.Tproc_out}); T=r.Tout;}
+  return {pumpPow,dTpump,T1:Tres+dTpump,steps,Tret:T,cp};
 }
 // стационар контура: рецикл tear-потоком + под-релаксация
 function loopSteady(P){
-  let Tres=P.Toil0, lam=0.7, hist=[], pass, iters=0;
+  let Tres=P.Toil0, lam=0.7, hist=[], m, iters=0;
   for(let k=0;k<300;k++){
-    pass=loopPass(P,Tres); const cp=loopCp(P,Tres);
-    // баланс резервуара: mOil·cp·(T2−Tres) = UAamb·(Tres−Tamb)  ⇒  новая оценка Tres
-    const Tnew=(P.mOil*cp*pass.T2+P.UAamb*P.Tamb)/(P.mOil*cp+P.UAamb);
+    m=loopMarch(P,Tres); const cp=m.cp;
+    // баланс резервуара: mOil·cp·(Tret−Tres) = UAamb·(Tres−Tamb)  ⇒  новая оценка Tres
+    const Tnew=(P.mOil*cp*m.Tret+P.UAamb*P.Tamb)/(P.mOil*cp+P.UAamb);
     hist.push(Tres); const upd=Tres+lam*(Tnew-Tres); iters=k+1;
     if(Math.abs(upd-Tres)<1e-7){Tres=upd;break;} Tres=upd;
   }
-  hist.push(Tres); pass=loopPass(P,Tres);
-  return {Tres,...pass,Qamb:P.UAamb*(Tres-P.Tamb),iters,hist};
+  hist.push(Tres); m=loopMarch(P,Tres);
+  const Qheat=m.steps.filter(s=>s.kind!=='load').reduce((a,s)=>a+s.Q,0);
+  const Qload=m.steps.filter(s=>s.kind==='load').reduce((a,s)=>a+s.Q,0);
+  const Tpeak=m.steps.reduce((a,s)=>Math.max(a,s.Tout),m.T1);
+  const hru=m.steps.find(s=>s.key==='HRU');
+  return {Tres,...m,Qamb:P.UAamb*(Tres-P.Tamb),Qheat,Qload,Tpeak,
+    pumpDiss:m.pumpPow*(1-P.etaPump),gasOutHRU:hru?hru.gas_out:null,iters,hist};
 }
-// динамика: резервуар как тепловая масса, утилизатор квазистационарен
-function loopDeriv(Tres,P){const pass=loopPass(P,Tres),cp=loopCp(P,Tres);
-  return (P.mOil*cp*(pass.T2-Tres)-P.UAamb*(Tres-P.Tamb))/Math.max(P.Cres,TINY);}
+// динамика: резервуар как тепловая масса, станции квазистационарны
+function loopDeriv(Tres,P){const m=loopMarch(P,Tres);
+  return (P.mOil*m.cp*(m.Tret-Tres)-P.UAamb*(Tres-P.Tamb))/Math.max(P.Cres,TINY);}
 // псевдо-«устройство» для общего решателя solveStep (x = T масла в резервуаре)
-function loopDevice(P){return {state0:()=>P.Toil0,deriv:x=>loopDeriv(x,P),
-  out:x=>{const pa=loopPass(P,x);return {Toil:x,Tgas_out:pa.Tgas_out,Qhru:pa.Qhru,Qamb:P.UAamb*(x-P.Tamb)};}};}
+function loopDevice(P){return {state0:()=>P.Toil0,deriv:x=>loopDeriv(x,P),out:x=>({Toil:x})};}
 
-// схема контура с «живыми» температурами
+/* --- схема контура (SVG) с «живыми» температурами; станции размещаются динамически --- */
+function svgMk(id,c){return '<marker id="'+id+'" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="'+c+'"/></marker>';}
+function svgLn(x1,y1,x2,y2,c,m){return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+c+'" stroke-width="3" marker-end="url(#'+m+')"/>';}
+function svgTx(x,y,c,t,a,s,w){return '<text x="'+x+'" y="'+y+'" fill="'+c+'" font-size="'+(s||11)+'" text-anchor="'+(a||'middle')+'"'+(w?' font-weight="'+w+'"':'')+'>'+t+'</text>';}
+function svgBx(x,y,w,h){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="10" fill="#0c1117" stroke="#2a313c"/>';}
 function loopSchematic(P,S){
   const T=v=>v.toFixed(1), Q=v=>v.toFixed(0);
-  return '<svg viewBox="0 0 720 250" width="100%" style="max-width:720px">'
-   +'<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">'
-   +'<path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker>'
-   +'<marker id="arg" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">'
-   +'<path d="M0,0 L7,3 L0,6 Z" fill="#e0a83b"/></marker></defs>'
-   // резервуар
-   +'<rect x="30" y="95" width="150" height="80" rx="10" fill="#0c1117" stroke="#2a313c"/>'
-   +'<text x="105" y="120" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Резервуар</text>'
-   +'<text x="105" y="142" fill="#9aa7b4" font-size="12" text-anchor="middle">'+T(S.Tres)+' °C</text>'
-   +'<text x="105" y="160" fill="#9aa7b4" font-size="11" text-anchor="middle">потери '+Q(S.Qamb)+' кВт ↓</text>'
-   // насос
-   +'<circle cx="320" cy="135" r="34" fill="#0c1117" stroke="#2a313c"/>'
-   +'<text x="320" y="131" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Насос</text>'
-   +'<text x="320" y="149" fill="#9aa7b4" font-size="11" text-anchor="middle">'+Q(S.pumpPow)+' кВт</text>'
-   // утилизатор
-   +'<rect x="500" y="95" width="180" height="80" rx="10" fill="#0c1117" stroke="#2a313c"/>'
-   +'<text x="590" y="120" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Утилизатор тепла</text>'
-   +'<text x="590" y="142" fill="#2ec27e" font-size="12" text-anchor="middle">Q = '+Q(S.Qhru)+' кВт → маслу</text>'
-   +'<text x="590" y="160" fill="#9aa7b4" font-size="11" text-anchor="middle">масло '+T(S.T1)+' → '+T(S.T2)+' °C</text>'
-   // нижний трубопровод: резервуар → насос → утилизатор
-   +'<line x1="180" y1="135" x2="286" y2="135" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
-   +'<line x1="354" y1="135" x2="500" y2="135" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
-   // верхний возврат: утилизатор → резервуар
-   +'<polyline points="590,95 590,55 105,55 105,95" fill="none" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
-   +'<text x="347" y="48" fill="#4ea1ff" font-size="11" text-anchor="middle">горячее масло '+T(S.T2)+' °C → в резервуар</text>'
-   // дымовой газ снизу-вверх через утилизатор
-   +'<line x1="560" y1="245" x2="560" y2="175" stroke="#e0a83b" stroke-width="3" marker-end="url(#arg)"/>'
-   +'<line x1="620" y1="95" x2="620" y2="24" stroke="#e0a83b" stroke-width="3" marker-end="url(#arg)"/>'
-   +'<text x="560" y="238" fill="#e0a83b" font-size="11" text-anchor="middle">дымовой газ '+T(P.Thin)+' °C</text>'
-   +'<text x="620" y="14" fill="#e0a83b" font-size="11" text-anchor="middle">→ в атмосферу '+T(S.Tgas_out)+' °C</text>'
-   +'</svg>';
+  const rw=148, ph=64, gap=26, y=86, bh=78, cy=y+bh/2;
+  const nodes=[]; let x=18;
+  nodes.push({kind:'res',l:x,r:x+rw,cx:x+rw/2}); x+=rw+gap;
+  nodes.push({kind:'pump',l:x,r:x+ph,cx:x+ph/2}); x+=ph+gap;
+  S.steps.forEach(s=>{nodes.push({kind:'step',l:x,r:x+rw,cx:x+rw/2,s}); x+=rw+gap;});
+  const W=x-gap+18, first=nodes[0], last=nodes[nodes.length-1];
+  let svg='<svg viewBox="0 0 '+W+' 250" width="100%"><defs>'
+    +svgMk('ar','#4ea1ff')+svgMk('arg','#e0a83b')+svgMk('are','#a978ff')+svgMk('arl','#3bd0d0')+'</defs>';
+  // нижний прямой трубопровод по всем узлам
+  for(let i=0;i<nodes.length-1;i++) svg+=svgLn(nodes[i].r+2,cy,nodes[i+1].l-2,cy,'#4ea1ff','ar');
+  // верхний возврат масла в резервуар
+  svg+='<polyline points="'+last.cx+','+y+' '+last.cx+',46 '+first.cx+',46 '+first.cx+','+y+'" fill="none" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>';
+  svg+=svgTx((last.cx+first.cx)/2,40,'#4ea1ff','масло в контуре '+T(S.Tret)+' °C → в резервуар');
+  nodes.forEach(n=>{
+    if(n.kind==='res'){svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+24,'#e6edf3','Резервуар',null,13,700)
+      +svgTx(n.cx,y+45,'#9aa7b4',T(S.Tres)+' °C')+svgTx(n.cx,y+63,'#9aa7b4','потери '+Q(S.Qamb)+' кВт ↓',null,10);}
+    else if(n.kind==='pump'){svg+='<circle cx="'+n.cx+'" cy="'+cy+'" r="'+(ph/2)+'" fill="#0c1117" stroke="#2a313c"/>'
+      +svgTx(n.cx,cy-4,'#e6edf3','Насос',null,12,700)+svgTx(n.cx,cy+13,'#9aa7b4',Q(S.pumpPow)+' кВт',null,10);}
+    else{const s=n.s, col=s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':'#2ec27e');
+      svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+22,'#e6edf3',s.label,null,12,700)
+        +svgTx(n.cx,y+42,col,(s.kind==='load'?'−':'+')+Q(s.Q)+' кВт',null,12)
+        +svgTx(n.cx,y+60,'#9aa7b4',T(s.Tin)+'→'+T(s.Tout)+' °C',null,11);
+      if(s.kind==='gas'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#e0a83b','arg')
+        +svgTx(n.cx,y+bh+22,'#e0a83b','газ '+T(s.gas_in)+'→'+T(s.gas_out)+'°C')
+        +svgTx(n.cx,y+bh+36,'#e0a83b','→ в атмосферу',null,10);}
+      else if(s.kind==='elec'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#a978ff','are')
+        +svgTx(n.cx,y+bh+22,'#a978ff','электро '+Q(s.Q)+' кВт');}
+      else if(s.kind==='load'){svg+=svgLn(n.cx,y+bh+2,n.cx,248,'#3bd0d0','arl')
+        +svgTx(n.cx,y+bh+22,'#3bd0d0','процесс '+T(s.proc_in)+'→'+T(s.proc_out)+'°C')
+        +svgTx(n.cx,y+bh+36,'#3bd0d0','отбор '+Q(s.Q)+' кВт',null,10);}}
+  });
+  return svg+'</svg>';
 }
 
 function runLoop(){
@@ -569,39 +618,44 @@ function runLoop(){
   el('cstatus').textContent='Расчёт контура...';
   setTimeout(()=>{
     const S=loopSteady(P), dev=loopDevice(P), inb=S.Tres>=lo&&S.Tres<=hi;
-    // схема контура
     el('loopSchema').innerHTML=loopSchematic(P,S);
     // KPI
-    el('lkpis').innerHTML=
-      '<div class="kpi '+(inb?'ok':'bad')+'"><b>'+S.Tres.toFixed(1)+' °C</b><span>T масла в контуре <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'
-      +'<div class="kpi"><b>'+S.Qhru.toFixed(0)+' кВт</b><span>тепло от газа (утилизатор)</span></div>'
-      +'<div class="kpi"><b>'+S.Tgas_out.toFixed(1)+' °C</b><span>газ на выбросе в атмосферу</span></div>'
-      +'<div class="kpi"><b>'+S.Qamb.toFixed(0)+' кВт</b><span>потери в среду (резервуар)</span></div>'
+    let kpi='<div class="kpi '+(inb?'ok':'bad')+'"><b>'+S.Tres.toFixed(1)+' °C</b><span>T масла в контуре <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'
+      +'<div class="kpi"><b>'+S.Tpeak.toFixed(1)+' °C</b><span>пик T масла (после нагрева)</span></div>'
+      +'<div class="kpi"><b>'+S.Qheat.toFixed(0)+' кВт</b><span>суммарный подвод тепла</span></div>';
+    if(P.load) kpi+='<div class="kpi"><b>'+S.Qload.toFixed(0)+' кВт</b><span>отбор потребителя</span></div>';
+    if(S.gasOutHRU!=null) kpi+='<div class="kpi"><b>'+S.gasOutHRU.toFixed(1)+' °C</b><span>газ HRU в атмосферу</span></div>';
+    kpi+='<div class="kpi"><b>'+S.Qamb.toFixed(0)+' кВт</b><span>потери в среду</span></div>'
       +'<div class="kpi"><b>'+S.iters+'</b><span>итераций рецикла</span></div>';
-    // график 1: переходный нагрев контура (выбранная схема) + равновесие + полоса интервала
+    el('lkpis').innerHTML=kpi;
+    // график 1: переходный нагрев контура + равновесие + полоса интервала
     let tr=[];
     if(scheme==='steady'){tr=[{x:[0,Ttot],y:[S.Tres,S.Tres],mode:'lines',line:{width:2.4,color:COLORS[1]},name:'стационар'}];}
     else{const r=solveStep(dev,null,'Toil',dt,Ttot,scheme);
       tr=[{x:r.t,y:r.y,mode:'lines',line:{width:2.4,color:COLORS[0]},name:(scheme==='implicit'?'неявный':'явный')+' Эйлер, Δt='+dt+' с'},
           {x:[0,Ttot],y:[S.Tres,S.Tres],mode:'lines',line:{width:1.4,dash:'dot',color:COLORS[1]},name:'равновесие'}];}
-    const lay1=layout('Нагрев масла в контуре до равновесия','время, с','T масла, °C');
+    const lay1=layout('Выход контура на режим (T масла в резервуаре)','время, с','T масла, °C');
     lay1.shapes=[{type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}}];
     Plotly.newPlot('plotLoopT',tr,lay1,cfg());
     // график 2: сходимость рецикла (tear-поток + под-релаксация)
     const it=S.hist.map((_,i)=>i);
     const lay2=layout('Сходимость рецикла: T резервуара по итерациям (под-релаксация λ=0.7)','итерация','T масла, °C');
     Plotly.newPlot('plotLoopConv',[{x:it,y:S.hist,mode:'lines+markers',line:{color:COLORS[2]},marker:{size:6},name:'tear-поток'}],lay2,cfg());
-    // таблица энергобаланса по узлам контура
+    // таблица: узлы контура + энергобаланс
     let html='<table><tr><th>узел</th><th>T масла,°C</th><th>примечание</th></tr>'
       +'<tr><td>Резервуар (выход)</td><td>'+S.Tres.toFixed(1)+'</td><td>tear-поток контура</td></tr>'
-      +'<tr><td>После насоса</td><td>'+S.T1.toFixed(1)+'</td><td>+'+S.dTpump.toFixed(2)+' °C от насоса ('+S.pumpPow.toFixed(0)+' кВт)</td></tr>'
-      +'<tr><td>Выход утилизатора</td><td>'+S.T2.toFixed(1)+'</td><td>+'+(S.T2-S.T1).toFixed(1)+' °C, Q='+S.Qhru.toFixed(0)+' кВт</td></tr>'
-      +'</table><table style="margin-top:8px"><tr><th>энергобаланс контура</th><th>кВт</th></tr>'
-      +'<tr><td>приход: тепло от дымового газа</td><td>'+S.Qhru.toFixed(0)+'</td></tr>'
-      +'<tr><td>приход: рассеяние насоса</td><td>'+(S.pumpPow*(1-P.etaPump)).toFixed(0)+'</td></tr>'
+      +'<tr><td>После насоса</td><td>'+S.T1.toFixed(1)+'</td><td>+'+S.dTpump.toFixed(2)+' °C ('+S.pumpPow.toFixed(0)+' кВт)</td></tr>';
+    S.steps.forEach(s=>{const info=s.kind==='gas'?('газ '+s.gas_in.toFixed(0)+'→'+s.gas_out.toFixed(1)+' °C → в атмосферу'):
+        (s.kind==='elec'?'электроподогрев':('процесс '+s.proc_in.toFixed(0)+'→'+s.proc_out.toFixed(1)+' °C'));
+      const dT=(s.Tout-s.Tin), sign=dT>=0?'+':'';
+      html+='<tr><td>'+s.label+'</td><td>'+s.Tout.toFixed(1)+'</td><td>'+sign+dT.toFixed(1)+' °C, '+(s.kind==='load'?'отбор':'Q')+'='+s.Q.toFixed(0)+' кВт · '+info+'</td></tr>';});
+    const resid=S.Qheat+S.pumpDiss-S.Qload-S.Qamb;
+    html+='</table><table style="margin-top:8px"><tr><th>энергобаланс контура</th><th>кВт</th></tr>'
+      +'<tr><td>приход: нагреватели (HRU+FHE+EOH)</td><td>'+S.Qheat.toFixed(0)+'</td></tr>'
+      +'<tr><td>приход: рассеяние насоса</td><td>'+S.pumpDiss.toFixed(0)+'</td></tr>'
+      +'<tr><td>расход: отбор потребителя</td><td>'+S.Qload.toFixed(0)+'</td></tr>'
       +'<tr><td>расход: потери в среду</td><td>'+S.Qamb.toFixed(0)+'</td></tr>'
-      +'<tr><td>невязка</td><td>'+(S.Qhru+S.pumpPow*(1-P.etaPump)-S.Qamb).toFixed(2)+'</td></tr>'
-      +'<tr><td>дымовой газ: '+P.Thin.toFixed(0)+' °C → выброс '+S.Tgas_out.toFixed(1)+' °C</td><td>—</td></tr></table>';
+      +'<tr><td>невязка</td><td>'+resid.toFixed(2)+'</td></tr></table>';
     el('loopTable').innerHTML=html;
     el('cstatus').textContent='Готово · равновесие '+S.Tres.toFixed(1)+' °C за '+S.iters+' итераций рецикла';
   },20);

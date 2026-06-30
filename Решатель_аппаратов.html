@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Динамический решатель аппаратов (0d) — устойчивый + связка</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.32.0/plotly.min.js"></script>
+<style>
+  :root{--bg:#0f1419;--panel:#161b22;--line:#2a313c;--txt:#e6edf3;--mut:#9aa7b4;--acc:#4ea1ff;--ok:#2ec27e;--bad:#e0596b;--warn:#e0a83b;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:14px}
+  header{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .tabs{display:flex;gap:8px;margin-left:auto}
+  .tab{padding:7px 14px;border:1px solid var(--line);border-radius:8px;cursor:pointer;color:var(--mut);font-size:13px}
+  .tab.on{background:var(--acc);color:#04101f;border-color:var(--acc);font-weight:700}
+  .wrap{display:flex}
+  .side{width:370px;flex:0 0 370px;border-right:1px solid var(--line);padding:12px 16px;overflow-y:auto;max-height:calc(100vh - 52px)}
+  .main{flex:1;padding:12px 18px;overflow-y:auto;max-height:calc(100vh - 52px)}
+  h3{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:16px 0 7px}
+  label{display:block;margin:7px 0 2px;color:var(--mut);font-size:12px}
+  input,select{width:100%;background:#0c1117;border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:7px 9px;font-size:13px}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+  .chip{user-select:none;border:1px solid var(--line);background:#0c1117;border-radius:20px;padding:5px 11px;cursor:pointer;font-size:12px;color:var(--mut)}
+  .chip.on{background:var(--acc);border-color:var(--acc);color:#04101f;font-weight:600}
+  button.run{margin-top:14px;width:100%;background:var(--acc);color:#04101f;border:none;border-radius:9px;padding:11px;font-size:14px;font-weight:700;cursor:pointer}
+  button.sec{background:#222b36;color:var(--txt)}
+  button.run:hover{filter:brightness(1.07)}
+  .note{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:6px}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--mut);margin-left:6px}
+  .pill.exact{color:var(--ok);border-color:#1f5e44}.pill.gen{color:var(--warn);border-color:#5e4a1f}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:14px}
+  .kpis{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 12px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:118px}
+  .kpi b{display:block;font-size:18px}.kpi span{font-size:11px;color:var(--mut)}
+  .kpi.ok{border-color:#1f5e44}.kpi.bad{border-color:#5e2b33}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;margin-left:6px}
+  .badge.ok{background:#16351f;color:var(--ok)}.badge.bad{background:#3a1c22;color:var(--bad)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  .unit{border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px;background:#0c1117}
+  .unit .hd{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+  .unit .hd b{flex:1}
+  .x{cursor:pointer;color:var(--bad);font-weight:700;padding:0 4px}
+  a{color:var(--acc)}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Решатель аппаратов · 0d · устойчивые схемы + связка</h1>
+  <div class="tabs">
+    <div class="tab on" id="tab-single" onclick="setMode('single')">Один аппарат</div>
+    <div class="tab" id="tab-chain" onclick="setMode('chain')">Связка (цепочка)</div>
+  </div>
+</header>
+
+<!-- ============ РЕЖИМ: ОДИН АППАРАТ ============ -->
+<div class="wrap" id="view-single">
+  <aside class="side">
+    <label>Аппарат</label>
+    <select id="device"></select>
+    <div id="devnote" class="note"></div>
+    <div id="params"></div>
+
+    <h3>Схема решения</h3>
+    <select id="solver">
+      <option value="steady">Стационар (прямой) — рекомендуется</option>
+      <option value="implicit">Неявный Эйлер (A-устойчив)</option>
+      <option value="explicit">Явный Эйлер (для сравнения)</option>
+    </select>
+    <div class="note" id="solvernote"></div>
+    <div class="row" style="margin-top:6px">
+      <div><label>Время расчёта, с</label><input id="Ttot" type="number" value="120"></div>
+      <div><label>Выходная хар-ка</label><select id="output"></select></div>
+    </div>
+    <label>Шаги Δt, с (наложить кривые)</label>
+    <div class="chips" id="dtchips"></div>
+    <div class="row" style="margin-top:6px">
+      <div><label>Добавить Δt</label><input id="dtadd" type="number" step="0.1"></div>
+      <div style="display:flex;align-items:end"><button class="run sec" style="margin:0" onclick="addDt()">+ добавить</button></div>
+    </div>
+
+    <h3>Целевой интервал (метрика)</h3>
+    <div class="row">
+      <div><label>Нижняя граница</label><input id="lo" type="number" step="any"></div>
+      <div><label>Верхняя граница</label><input id="hi" type="number" step="any"></div>
+    </div>
+    <div class="note">Метрика — попадание установившегося значения в интервал. На графике сходимости интервал показан зелёной полосой.</div>
+
+    <label style="margin-top:10px"><input type="checkbox" id="cmpAll" style="width:auto"> сравнить все 3 схемы на графике сходимости</label>
+    <button class="run" onclick="runSingle()">▶ Рассчитать</button>
+    <div class="note" id="status"></div>
+  </aside>
+  <main class="main">
+    <div class="kpis" id="kpis"></div>
+    <div class="card"><div id="plotT" style="height:400px"></div></div>
+    <div class="card"><div id="plotC" style="height:360px"></div></div>
+    <div class="note" id="legend"></div>
+  </main>
+</div>
+
+<!-- ============ РЕЖИМ: СВЯЗКА ============ -->
+<div class="wrap hide" id="view-chain">
+  <aside class="side">
+    <h3>Топология</h3>
+    <select id="topology" onchange="setTopology()">
+      <option value="open">Открытая цепочка (масло проходит насквозь)</option>
+      <option value="loop">Замкнутый контур масла (насос + резервуар + утилизатор)</option>
+    </select>
+
+    <!-- ----- ПАНЕЛЬ: ОТКРЫТАЯ ЦЕПОЧКА ----- -->
+    <div id="panel-open">
+      <h3>Общий контур масла</h3>
+      <div class="row3">
+        <div><label>T масла вход, °C</label><input id="c_Tin" type="number" value="120"></div>
+        <div><label>Расход масла, кг/с</label><input id="c_mdot" type="number" value="15"></div>
+        <div><label>cp учитывать</label><select id="c_cp"><option value="1">да (TH59)</option><option value="0">конст</option></select></div>
+      </div>
+
+      <h3>Цепочка аппаратов <span class="note" style="display:inline">(масло проходит последовательно)</span></h3>
+      <div id="units"></div>
+      <div class="row">
+        <div><select id="addtype">
+          <option value="HRU">HRU — утилизатор тепла (газ→масло)</option>
+          <option value="FHE">FHE — печной (газ→масло)</option>
+          <option value="CHE">CHE — рекуператор (газ→масло)</option>
+          <option value="EOH">EOH — огневой подогрев (электро)</option>
+        </select></div>
+        <div><button class="run sec" style="margin:0" onclick="addUnit()">+ аппарат</button></div>
+      </div>
+
+      <h3>Целевой интервал по T масла на выходе цепочки</h3>
+      <div class="row">
+        <div><label>Нижняя, °C</label><input id="c_lo" type="number" value="258"></div>
+        <div><label>Верхняя, °C</label><input id="c_hi" type="number" value="266"></div>
+      </div>
+      <button class="run" onclick="runChain()">▶ Рассчитать цепочку</button>
+    </div>
+
+    <!-- ----- ПАНЕЛЬ: ЗАМКНУТЫЙ КОНТУР ----- -->
+    <div id="panel-loop" class="hide">
+      <h3>Масло в контуре (циркуляция через насос)</h3>
+      <div class="row3">
+        <div><label>T масла нач., °C</label><input id="l_Toil0" type="number" value="120"></div>
+        <div><label>Расход, кг/с</label><input id="l_mOil" type="number" value="15"></div>
+        <div><label>cp</label><select id="l_cp"><option value="1">TH59</option><option value="0">конст 2.0</option></select></div>
+      </div>
+
+      <h3>Насос</h3>
+      <div class="row">
+        <div><label>Напор ΔP, кПа</label><input id="l_dPpump" type="number" value="350"></div>
+        <div><label>КПД насоса</label><input id="l_etaPump" type="number" step="0.01" value="0.7"></div>
+      </div>
+
+      <h3>Резервуар (бак-аккумулятор)</h3>
+      <div class="row3">
+        <div><label>C, кДж/К</label><input id="l_Cres" type="number" value="15000"></div>
+        <div><label>UA в среду, кВт/К</label><input id="l_UAamb" type="number" value="9"></div>
+        <div><label>T среды, °C</label><input id="l_Tamb" type="number" value="20"></div>
+      </div>
+
+      <h3>Утилизатор тепла <span class="note" style="display:inline">(дымовой газ → масло → в атмосферу)</span></h3>
+      <div class="row3">
+        <div><label>T газа вход, °C</label><input id="l_Thin" type="number" value="585"></div>
+        <div><label>Расход газа, кг/с</label><input id="l_mGas" type="number" value="20"></div>
+        <div><label>UA, кВт/К</label><input id="l_UA" type="number" value="8"></div>
+      </div>
+
+      <h3>Схема решения (нагрев контура)</h3>
+      <select id="l_solver">
+        <option value="steady">Стационар (рецикл + под-релаксация) — рекомендуется</option>
+        <option value="implicit">Неявный Эйлер (A-устойчив)</option>
+        <option value="explicit">Явный Эйлер (для сравнения)</option>
+      </select>
+      <div class="row" style="margin-top:6px">
+        <div><label>Время, с</label><input id="l_Ttot" type="number" value="6000"></div>
+        <div><label>Шаг Δt, с</label><input id="l_dt" type="number" value="60"></div>
+      </div>
+
+      <h3>Целевой интервал T масла, °C</h3>
+      <div class="row">
+        <div><label>Нижняя</label><input id="l_lo" type="number" value="245"></div>
+        <div><label>Верхняя</label><input id="l_hi" type="number" value="262"></div>
+      </div>
+      <button class="run" onclick="runLoop()">▶ Рассчитать контур</button>
+    </div>
+    <div class="note" id="cstatus"></div>
+  </aside>
+  <main class="main">
+    <!-- ----- ВЫВОД: ОТКРЫТАЯ ЦЕПОЧКА ----- -->
+    <div id="main-open">
+      <div class="kpis" id="ckpis"></div>
+      <div class="card"><div id="plotChain" style="height:380px"></div></div>
+      <div class="card"><div id="chainTable"></div></div>
+      <div class="note">Метод связки — sequential-modular: выход масла одного аппарата подаётся на вход следующего; каждый узел решается в стационаре (ε-NTU для теплообменников, прямой баланс для EOH). Устойчиво и без итерационных срывов.</div>
+    </div>
+    <!-- ----- ВЫВОД: ЗАМКНУТЫЙ КОНТУР ----- -->
+    <div id="main-loop" class="hide">
+      <div class="kpis" id="lkpis"></div>
+      <div class="card"><div id="loopSchema"></div></div>
+      <div class="card"><div id="plotLoopT" style="height:340px"></div></div>
+      <div class="card"><div id="plotLoopConv" style="height:300px"></div></div>
+      <div class="card"><div id="loopTable"></div></div>
+      <div class="note">Замкнутый контур — задача с рециклом: масло циркулирует Резервуар → Насос → Утилизатор → Резервуар, нагреваясь дымовым газом; газ после отдачи тепла выбрасывается в атмосферу. Стационар ищется разрывом рецикла tear-потоком и под-релаксацией (§2.5 рекомендаций); равновесие — баланс «тепло от газа = потери в среду». Все три схемы сходятся к одному значению.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ===================== СВОЙСТВА ===================== */
+function oilProps(T){const Tc=T-273.15;return {rho:992-0.78*Tc,cp:1.55+0.0034*Tc,lam:(0.124-0.00008*Tc)/1000,eta:6.0e-11*Math.exp(5518/T)};} // eta — фит TH59
+function oilCp(T){return 1.55+0.0034*(T-273.15);}
+function gasCp(T){return (-229.668+463.18*Math.pow(T,0.168614))/1000.0;}
+// §2.3 гладкий ограничитель max(0,x) без излома (C∞); eps мал -> значения почти не меняются
+function smax0(x){const e=1e-3;return 0.5*(x+Math.sqrt(x*x+e*e));}
+const TINY=1e-9;
+
+/* ===================== EOH ===================== */
+function eohGeom(p){
+  const nRow=p.TEH_Row*Math.PI/4*p.amount_of_sections;
+  const len_sec=p.len_HE_zone/p.amount_of_sections;
+  const A=Math.max(len_sec*(p.d_inner_oil_ch-p.TEH_Row*p.d_TEH)*Math.PI/4, 1e-6); // §2.4 защита площади>0
+  return {nRow,A,d:p.d_TEH,HE:2*p.len_HE_zone*p.TEH_amount*Math.PI*p.d_TEH,C:Math.max(p.mass_TEH*p.TEH_amount*p.cp_TEH_bundle,TINY)};
+}
+function eohHydraulics(p,g,Tmean){           // -> {mdot, al, Re}
+  const pr=oilProps(Tmean), dPav=p.P_in-p.P_out;
+  const fric=m=>{const v=m/(pr.rho*g.A),Re=v*pr.rho*g.d/pr.eta;
+    const s1=0/g.d,s2=0/g.d,phi=(s1-1)/(s2-1);                  // нейтральная калибровка (s1=s2=0)
+    const cS=3.2+0.66*Math.pow(smax0(1.7-phi),1.5);             // §2.3/2.4 гладкая защита от NaN
+    const sg=1/(1+Math.exp(-(Re-100)/100));
+    const zeta=(g.nRow+1)*(cS*Math.pow(100,-0.27)*(1-sg)+cS*Math.pow(Re+1,-0.27)*sg);
+    return p.k_delta_DP*zeta*pr.rho*v*v/2/1000+p.coef_deltaP_Valve*m*m-dPav;};
+  let a=.01,b=80;for(let i=0;i<80;i++){const c=.5*(a+b);(fric(c)<0?a=c:b=c);}
+  const mdot=.5*(a+b),v=mdot/(pr.rho*g.A),Re=v*pr.rho*g.d/pr.eta;
+  const Pr=pr.eta*(pr.cp*1000)/(pr.lam*1000),sg=1/(1+Math.exp(-(Re-10)/10));
+  const Nu=(1*(1-sg))+(p.c*Math.pow(Re,p.n)*Math.pow(Pr,p.m))*sg;
+  return {mdot, al:Nu*pr.lam/g.d, Re, pr};
+}
+function nRowOf(g){return g.nRow;}
+function eohSteady(p){                         // прямой стационар
+  const g=eohGeom(p), Tin=p.T_in_oil+273.15, Q=p.TEH_bundle_Power;
+  let Tmean=Tin+10, h;
+  for(let it=0;it<60;it++){h=eohHydraulics(p,g,Tmean);
+    const Tout=Tin+Q/(h.mdot*h.pr.cp), nm=(Tin+Tout)/2;
+    if(Math.abs(nm-Tmean)<1e-5){Tmean=nm;break;}Tmean=nm;}
+  const Tout=Tin+Q/Math.max(h.mdot*h.pr.cp,TINY), Tb=Tmean+Q/Math.max(p.k_delta_H*h.al*g.HE,TINY);
+  return {Tout:Tout-273.15, mdot:h.mdot, Q, Tb:Tb-273.15, dP:p.P_in-p.P_out, alpha:h.al, Re:h.Re};
+}
+function eohDeriv(Tb_K,p){                      // dTb/dt для динамики
+  const g=eohGeom(p), Tin=p.T_in_oil+273.15;
+  let Tmean=Tin+8,h,Q=0;
+  for(let it=0;it<25;it++){h=eohHydraulics(p,g,Tmean);
+    const dT=Tb_K-Tmean; Q=p.k_delta_H*h.al*smax0(dT)*g.HE;
+    const Tout=Tin+Q/(h.mdot*h.pr.cp),nm=(Tin+Tout)/2;
+    if(Math.abs(nm-Tmean)<1e-4){Tmean=nm;break;}Tmean=nm;}
+  return (p.TEH_bundle_Power-Q)/g.C;
+}
+function eohOut(Tb_K,p){
+  const g=eohGeom(p),Tin=p.T_in_oil+273.15; let Tmean=Tin+8,h,Q=0;
+  for(let it=0;it<25;it++){h=eohHydraulics(p,g,Tmean);const dT=Tb_K-Tmean;Q=p.k_delta_H*h.al*smax0(dT)*g.HE;
+    const Tout=Tin+Q/(h.mdot*h.pr.cp),nm=(Tin+Tout)/2;if(Math.abs(nm-Tmean)<1e-4){Tmean=nm;break;}Tmean=nm;}
+  const Tout=Tin+Q/(h.mdot*h.pr.cp);
+  return {Tb:Tb_K-273.15,Tout:Tout-273.15,Q,mdot:h.mdot,dP:p.P_in-p.P_out,alpha:h.al,Re:h.Re};
+}
+
+/* ===================== ТЕПЛООБМЕННИК ε-NTU ===================== */
+function hxNTU(p, TcInC){                       // стационар; TcInC переопределяет вход масла (для связки)
+  const Thi=p.Th_in+273.15, Tci=(TcInC!=null?TcInC:p.Tc_in)+273.15;
+  const Tm=(Thi+Tci)/2, Ch=p.mdot_h*gasCp(Tm), Cc=p.mdot_c*oilCp(Tm);
+  const Cmin=Math.max(Math.min(Ch,Cc),TINY),Cmax=Math.max(Ch,Cc),Cr=Cmin/Cmax;   // §2.4 защита C_min>0
+  const UA=p.UA_h*p.UA_c/Math.max(p.UA_h+p.UA_c,TINY), NTU=UA/Cmin;
+  let eps=Math.abs(1-Cr)<1e-6? NTU/(1+NTU) : (1-Math.exp(-NTU*(1-Cr)))/(1-Cr*Math.exp(-NTU*(1-Cr)));
+  const q=eps*Cmin*(Thi-Tci);
+  return {Th_out:Thi-q/Ch-273.15, Tc_out:Tci+q/Cc-273.15, Q:q, eps, NTU, Tw:(Thi+Tci)/2-273.15};
+}
+// динамика теплообменника = релаксация выхода масла к ε-NTU-стационару (τ=C_wall/UA).
+// Так ВСЕ схемы (стационар/неявный/явный) сходятся к ОДНОМУ значению; явный Эйлер
+// при dt>2τ теряет устойчивость, неявный устойчив при любом dt.
+function hxState0(p){return p.T_init_wall;}            // состояние = T масла на выходе, °C
+function hxSteadyFn(p){return hxNTU(p);}
+function hxTau(p){const UAe=p.UA_h*p.UA_c/(p.UA_h+p.UA_c);const Cc=p.mdot_c*oilCp(p.Tc_in+273.15);return p.C_wall/Math.max(UAe,1e-6);}
+function hxDerivFn(x,p){return (hxNTU(p).Tc_out - x)/hxTau(p);}
+function hxOutFn(x,p){
+  const Tci=p.Tc_in, Cc=p.mdot_c*oilCp((x+Tci)/2+273.15), Q=Cc*(x-Tci);
+  const Ch=p.mdot_h*gasCp((p.Th_in+x)/2+273.15), Th_out=p.Th_in-Q/Ch;
+  return {Tc_out:x, Th_out, Q, Tw:(p.Th_in+x)/2};
+}
+
+/* ===================== РЕЕСТР ===================== */
+const U_T='°C',U_Q='кВт',U_M='кг/с',U_P='кПа';
+const DEV={
+  EOH:{title:'EOH — огневой подогреватель',tag:'exact',state0:p=>p.T_init_bundle+273.15,
+    note:'Точная модель из исходников (фикс гидравлики, нейтральная калибровка s1=s2=0). Состояние — темп. пучка ТЭН. Стационар считается прямым балансом Q=мощность.',
+    steady:eohSteady, deriv:eohDeriv, out:eohOut,
+    params:[['group','Тепло / мощность'],['TEH_bundle_Power','Мощность ТЭН',180,U_Q],['TEH_amount','Кол-во ТЭН',45,'шт'],
+      ['mass_TEH','Масса ТЭН',2.4,'кг'],['cp_TEH_bundle','cp ТЭН',0.75,'кДж/кг·К'],['k_delta_H','k теплообмена',1,''],
+      ['group','Геометрия'],['len_HE_zone','Длина зоны',3,'м'],['d_TEH','Ø ТЭН',0.012,'м'],['TEH_Row','Рядов труб',11,'шт'],
+      ['amount_of_sections','Секций',35,'шт'],['d_inner_oil_ch','Ø канала',0.236,'м'],
+      ['c','Nu c',0.64,''],['n','Re n',0.5,''],['m','Pr m',0.33,''],
+      ['group','Гидравлика / границы'],['P_in','P вход',711,U_P],['P_out','P выход',660,U_P],
+      ['T_in_oil','T масла вход',10,U_T],['T_init_bundle','T пучка нач.',11,U_T],['coef_deltaP_Valve','Клапан',0,''],['k_delta_DP','k ΔP',1,'']],
+    outs:[['Tout','T масла выход',U_T,[28.5,31.5]],['Tb','T пучка ТЭН',U_T,null],['Q','Тепл. поток',U_Q,null],
+      ['mdot','Расход масла',U_M,[5.2,5.7]],['dP','Перепад P',U_P,[47.5,52.5]],['alpha','α',U_Q+'/м²К',null],['Re','Re',null,null]],
+    kpis:['Tout','mdot','dP','Q']},
+  HRU:{title:'HRU — утилизатор тепла',tag:'gen',state0:p=>p.T_init_wall+273.15,
+    note:'Обобщённый теплообменник. Стационар — метод ε-NTU (робастно, без LMTD-сингулярности). Динамика — стенка с тепловой массой.',
+    steadyHX:true,
+    params:[['group','Горячая сторона (газ)'],['Th_in','T газа вход',585,U_T],['mdot_h','Расход газа',20,U_M],['UA_h','UA газ↔стенка',18,U_Q+'/К'],
+      ['group','Холодная сторона (масло)'],['Tc_in','T масла вход',185,U_T],['mdot_c','Расход масла',15,U_M],['UA_c','UA стенка↔масло',18,U_Q+'/К'],
+      ['group','Динамика'],['C_wall','Теплоёмкость стенки',400,'кДж/К'],['T_init_wall','T стенки нач.',200,U_T]],
+    outs:[['Tc_out','T масла выход',U_T,[245,255]],['Th_out','T газа выход',U_T,null],['Tw','T стенки',U_T,null],['Q','Тепл. поток',U_Q,null]],
+    kpis:['Tc_out','Th_out','Q']},
+  CHE:{title:'CHE — рекуператор',tag:'gen',state0:p=>p.T_init_wall+273.15,
+    note:'Обобщённый теплообменник (ε-NTU + стенка). Параметры близки к режиму 714.',
+    steadyHX:true,
+    params:[['group','Горячая сторона (газ)'],['Th_in','T газа вход',639,U_T],['mdot_h','Расход газа',18,U_M],['UA_h','UA газ↔стенка',7,U_Q+'/К'],
+      ['group','Холодная сторона (масло)'],['Tc_in','T масла вход',192,U_T],['mdot_c','Расход масла',22,U_M],['UA_c','UA стенка↔масло',7,U_Q+'/К'],
+      ['group','Динамика'],['C_wall','Теплоёмкость стенки',350,'кДж/К'],['T_init_wall','T стенки нач.',300,U_T]],
+    outs:[['Tc_out','T масла выход',U_T,[207,217]],['Th_out','T газа выход',U_T,null],['Tw','T стенки',U_T,null],['Q','Тепл. поток',U_Q,null]],
+    kpis:['Tc_out','Th_out','Q']},
+  FHE:{title:'FHE — печной теплообменник',tag:'gen',state0:p=>p.T_init_wall+273.15,
+    note:'Обобщённый теплообменник (ε-NTU + стенка). Параметры близки к режиму 714 (масло 212→262).',
+    steadyHX:true,
+    params:[['group','Горячая сторона (газ/печь)'],['Th_in','T газа вход',700,U_T],['mdot_h','Расход газа',20,U_M],['UA_h','UA газ↔стенка',14,U_Q+'/К'],
+      ['group','Холодная сторона (масло)'],['Tc_in','T масла вход',212,U_T],['mdot_c','Расход масла',18,U_M],['UA_c','UA стенка↔масло',14,U_Q+'/К'],
+      ['group','Динамика'],['C_wall','Теплоёмкость стенки',380,'кДж/К'],['T_init_wall','T стенки нач.',300,U_T]],
+    outs:[['Tc_out','T масла выход',U_T,[257,267]],['Th_out','T газа выход',U_T,null],['Tw','T стенки',U_T,null],['Q','Тепл. поток',U_Q,null]],
+    kpis:['Tc_out','Th_out','Q']}
+};
+// единый интерфейс для теплообменников: steady/deriv/out/state0
+['HRU','CHE','FHE'].forEach(k=>{DEV[k].steady=hxSteadyFn;DEV[k].deriv=hxDerivFn;DEV[k].out=hxOutFn;DEV[k].state0=hxState0;});
+const COLORS=['#4ea1ff','#2ec27e','#e0a83b','#e0596b','#a978ff','#3bd0d0','#ff8c42','#9aa7b4'];
+let DT=[0.5,1,2,5,10,20], PRESET_DT=[0.25,0.5,1,2,5,10,20,40];
+const el=id=>document.getElementById(id), curDev=()=>DEV[el('device').value];
+
+/* ===================== РЕШАТЕЛЬ ===================== */
+// единый решатель: x' = f(x). scheme: implicit (backward Euler, A-устойчив) / explicit.
+function solveStep(d,p,outKey,dt,Ttot,scheme){
+  const t=[],y=[]; let x=d.state0(p);
+  const N=Math.max(1,Math.round(Ttot/dt));
+  const f=xx=>d.deriv(xx,p);
+  for(let i=0;i<=N;i++){
+    t.push(i*dt); y.push(d.out(x,p)[outKey]);
+    if(scheme==='explicit'){ x=x+dt*f(x); }
+    else { let a=x-2e4,b=x+2e4; const g=xn=>xn-x-dt*f(xn);
+      for(let k=0;k<200;k++){const c=.5*(a+b);(g(c)<0?a=c:b=c);} x=.5*(a+b); }
+    if(!isFinite(x)||Math.abs(x)>1e7) break;
+  }
+  return {t,y};
+}
+function steadyValue(d,p,outKey){return d.steady(p)[outKey];}
+
+/* ===================== UI: ОДИН АППАРАТ ===================== */
+function buildDeviceSelect(){const s=el('device');s.innerHTML='';for(const k in DEV){const o=document.createElement('option');o.value=k;o.textContent=DEV[k].title;s.appendChild(o);}s.onchange=onDevice;}
+function onDevice(){const d=curDev();
+  el('devnote').innerHTML='<span class="pill '+(d.tag==='exact'?'exact">точная':'gen">обобщённая')+'</span><div class="note">'+d.note+'</div>';
+  const box=el('params');box.innerHTML='';let grid=null;
+  d.params.forEach(([a,b,c,u])=>{if(a==='group'){const h=document.createElement('h3');h.textContent=b;box.appendChild(h);grid=document.createElement('div');grid.className='row';box.appendChild(grid);return;}
+    const w=document.createElement('div');w.innerHTML='<label>'+b+(u?' <span style="opacity:.6">['+u+']</span>':'')+'</label><input type="number" step="any" id="p_'+a+'" value="'+c+'">';(grid||box).appendChild(w);});
+  const os=el('output');os.innerHTML='';d.outs.forEach(([k,l,u])=>{const o=document.createElement('option');o.value=k;o.textContent=l+(u?' ['+u+']':'');os.appendChild(o);});
+  os.onchange=syncInterval; syncInterval();
+}
+function syncInterval(){const d=curDev();const o=d.outs.find(x=>x[0]===el('output').value);if(o&&o[3]){el('lo').value=o[3][0];el('hi').value=o[3][1];}else{el('lo').value='';el('hi').value='';}}
+function readParams(){const p={};curDev().params.forEach(([a])=>{if(a!=='group'){const e=el('p_'+a);if(e)p[a]=parseFloat(e.value);}});return p;}
+function buildDtChips(){const box=el('dtchips');box.innerHTML='';PRESET_DT.forEach(v=>{const c=document.createElement('span');c.className='chip'+(DT.includes(v)?' on':'');c.textContent=v+' с';c.onclick=()=>{DT.includes(v)?DT=DT.filter(x=>x!==v):DT=[...DT,v].sort((a,b)=>a-b);buildDtChips();};box.appendChild(c);});}
+function addDt(){const v=parseFloat(el('dtadd').value);if(v>0&&!DT.includes(v)){DT=[...DT,v].sort((a,b)=>a-b);if(!PRESET_DT.includes(v)){PRESET_DT.push(v);PRESET_DT.sort((a,b)=>a-b);}buildDtChips();el('dtadd').value='';}}
+function solverNote(){const m=el('solver').value;el('solvernote').innerHTML={steady:'Прямой расчёт установившегося режима — мгновенно, без шага по времени, всегда устойчиво. Лучший для метрики «попадание в интервал».',implicit:'Backward Euler: A-устойчив, сходится к стационару при ЛЮБОМ Δt (переходная точность приносится в жертву).',explicit:'Forward Euler: при крупном Δt теряет устойчивость — для демонстрации контраста.'}[m];}
+
+function runSingle(){
+  const d=curDev(),p=readParams(),Ttot=parseFloat(el('Ttot').value),scheme=el('solver').value;
+  const outKey=el('output').value,o=d.outs.find(x=>x[0]===outKey);
+  const lo=parseFloat(el('lo').value),hi=parseFloat(el('hi').value),hasInt=isFinite(lo)&&isFinite(hi);
+  el('status').textContent='Расчёт...';
+  setTimeout(()=>{
+    let tracesT=[],conv={};
+    if(scheme==='steady'){
+      const val=steadyValue(d,p,outKey);
+      tracesT=[{x:[0,Ttot],y:[val,val],mode:'lines',line:{width:2.4,color:COLORS[0]},name:'стационар'}];
+      conv.steady={x:DT.slice(),y:DT.map(()=>val)};
+    }else{
+      DT.slice().sort((a,b)=>a-b).forEach((dt,i)=>{const r=solveStep(d,p,outKey,dt,Ttot,scheme);
+        tracesT.push({x:r.t,y:r.y,mode:'lines',name:'Δt='+dt+' с',line:{width:dt===Math.min(...DT)?2.4:1.5,color:COLORS[i%COLORS.length]}});});
+    }
+    // график 1
+    Plotly.newPlot('plotT',tracesT,layout('Переходный процесс: '+o[1]+(scheme==='steady'?' (стационар)':' — наложение Δt'),'время, с',o[1]+(o[2]?', '+o[2]:'')),cfg());
+    // график 2: сходимость vs Δt + полоса интервала; опц. сравнение схем
+    let cTraces=[];
+    const schemes = el('cmpAll').checked? ['steady','implicit','explicit'] : [scheme];
+    const names={steady:'стационар',implicit:'неявный Эйлер',explicit:'явный Эйлер'};
+    schemes.forEach((sc,si)=>{
+      const xs=DT.slice().sort((a,b)=>a-b), ys=xs.map(dt=>{
+        if(sc==='steady') return steadyValue(d,p,outKey);
+        const r=solveStep(d,p,outKey,dt,Ttot,sc); return r.y[r.y.length-1];
+      });
+      cTraces.push({x:xs,y:ys,mode:'lines+markers',name:names[sc],line:{color:COLORS[si]},marker:{size:8}});
+    });
+    const shapes=[]; if(hasInt) shapes.push({type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}});
+    const lay=layout('Сходимость: установившееся «'+o[1]+'» в зависимости от Δt','шаг Δt, с','значение на t='+Ttot+' с'+(o[2]?', '+o[2]:''));
+    lay.xaxis.type='log'; lay.shapes=shapes;
+    Plotly.newPlot('plotC',cTraces,lay,cfg());
+    // KPI с проверкой интервала
+    const box=el('kpis');box.innerHTML='';
+    const ref = scheme==='steady'? null : null;
+    d.kpis.forEach(k=>{const oo=d.outs.find(x=>x[0]===k);let val;
+      if(scheme==='steady'){val=steadyValue(d,p,k);}else{const r=solveStep(d,p,k,Ttot,Math.min(...DT),scheme);val=r.y[r.y.length-1];}
+      const oi=d.outs.find(x=>x[0]===k); let cls='',badge='';
+      if(oi&&oi[3]){const inb=val>=oi[3][0]&&val<=oi[3][1];cls=inb?'ok':'bad';badge='<span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span>';}
+      box.innerHTML+='<div class="kpi '+cls+'"><b>'+(isFinite(val)?val.toFixed(2):'—')+'</b><span>'+oo[1]+(oo[2]?', '+oo[2]:'')+badge+'</span></div>';});
+    // метрика по основному выходу
+    let metr='';
+    if(hasInt){const v=scheme==='steady'?steadyValue(d,p,outKey):(()=>{const r=solveStep(d,p,outKey,Math.min(...DT),Ttot,scheme);return r.y[r.y.length-1];})();
+      const inb=v>=lo&&v<=hi; metr=' · метрика по «'+o[1]+'»: '+(inb?'<span style="color:var(--ok)">ПОПАЛ в ['+lo+'; '+hi+']</span>':'<span style="color:var(--bad)">ВНЕ ['+lo+'; '+hi+']</span>');}
+    el('legend').innerHTML='Зелёная полоса — целевой интервал. Стационар и неявный Эйлер держат значение в полосе при любом Δt; явный Эйлер при крупном Δt уходит из полосы.'+metr;
+    el('status').textContent='Готово · схема: '+names[scheme];
+  },20);
+}
+function layout(title,xt,yt){return {title:{text:title,font:{color:'#e6edf3',size:14}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#9aa7b4'},xaxis:{title:xt,gridcolor:'#222b36',zeroline:false},yaxis:{title:yt,gridcolor:'#222b36',zeroline:false},legend:{orientation:'h'},margin:{t:42,r:18,b:46,l:62}};}
+function cfg(){return {responsive:true,displayModeBar:false};}
+
+/* ===================== СВЯЗКА ===================== */
+let UNITS=[];
+const UNIT_DEF={
+  HRU:{label:'HRU (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:585,mdot_h:20,UA:8}},
+  FHE:{label:'FHE (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:700,mdot_h:20,UA:7}},
+  CHE:{label:'CHE (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:639,mdot_h:18,UA:7}},
+  EOH:{label:'EOH (электро)',f:['Power'],d:{Power:180}}
+};
+function addUnit(){const t=el('addtype').value;UNITS.push({type:t,...JSON.parse(JSON.stringify(UNIT_DEF[t].d))});renderUnits();}
+function delUnit(i){UNITS.splice(i,1);renderUnits();}
+function renderUnits(){const box=el('units');box.innerHTML='';
+  UNITS.forEach((u,i)=>{const def=UNIT_DEF[u.type];const d=document.createElement('div');d.className='unit';
+    let inner='<div class="hd"><b>'+(i+1)+'. '+def.label+'</b><span class="x" onclick="delUnit('+i+')">✕</span></div><div class="row3">';
+    def.f.forEach(f=>{const lab={Th_in:'T газа,°C',mdot_h:'расход газа',UA:'UA,кВт/К',Power:'Мощность,кВт'}[f];
+      inner+='<div><label>'+lab+'</label><input type="number" step="any" oninput="UNITS['+i+'].'+f+'=parseFloat(this.value)" value="'+u[f]+'"></div>';});
+    inner+='</div>';d.innerHTML=inner;box.appendChild(d);});
+  if(!UNITS.length)box.innerHTML='<div class="note">Добавьте аппараты в цепочку — масло пойдёт через них последовательно.</div>';
+}
+function runChain(){
+  if(!UNITS.length){el('cstatus').textContent='Добавьте хотя бы один аппарат';return;}
+  const oilM=parseFloat(el('c_mdot').value), useCp=el('c_cp').value==='1';
+  let T=parseFloat(el('c_Tin').value);
+  const prof=[T], rows=[];
+  UNITS.forEach((u,i)=>{
+    let Tout,Q;
+    if(u.type==='EOH'){ const cp=useCp?oilCp(((T+273.15)+(T+273.15))/2):2.0; Q=u.Power; Tout=T+Q/(oilM*cp); }
+    else{ const r=hxNTU({Th_in:u.Th_in,mdot_h:u.mdot_h,mdot_c:oilM,UA_h:2*u.UA,UA_c:2*u.UA}, T); Tout=r.Tc_out; Q=r.Q; }
+    rows.push({n:i+1,type:u.type,Tin:T,Tout,Q}); T=Tout; prof.push(T);
+  });
+  const lo=parseFloat(el('c_lo').value),hi=parseFloat(el('c_hi').value),inb=T>=lo&&T<=hi;
+  // график профиля
+  const xs=['вход']; UNITS.forEach((u,i)=>xs.push((i+1)+'.'+u.type));
+  const lay=layout('Профиль температуры масла вдоль цепочки','узел','T масла, °C');
+  lay.shapes=[{type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}}];
+  Plotly.newPlot('plotChain',[{x:xs,y:prof,mode:'lines+markers',line:{shape:'hv',color:'#4ea1ff',width:2},marker:{size:9}}],lay,cfg());
+  // таблица
+  let html='<table><tr><th>№</th><th>аппарат</th><th>T вход,°C</th><th>T выход,°C</th><th>Q,кВт</th></tr>';
+  rows.forEach(r=>html+='<tr><td>'+r.n+'</td><td>'+r.type+'</td><td>'+r.Tin.toFixed(1)+'</td><td>'+r.Tout.toFixed(1)+'</td><td>'+r.Q.toFixed(0)+'</td></tr>');
+  html+='</table>';el('chainTable').innerHTML=html;
+  // KPI
+  el('ckpis').innerHTML='<div class="kpi '+(inb?'ok':'bad')+'"><b>'+T.toFixed(1)+' °C</b><span>T масла на выходе цепочки <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'+
+    '<div class="kpi"><b>'+rows.reduce((s,r)=>s+r.Q,0).toFixed(0)+' кВт</b><span>суммарный тепловой поток</span></div>'+
+    '<div class="kpi"><b>'+(T-prof[0]).toFixed(1)+' °C</b><span>нагрев масла за цепочку</span></div>';
+  el('cstatus').textContent='Готово · узлов: '+UNITS.length;
+}
+
+/* ===================== ЗАМКНУТЫЙ КОНТУР МАСЛА =====================
+   Резервуар → Насос → Утилизатор тепла (дымовой газ → масло) → Резервуар.
+   Дымовой газ после отдачи тепла выбрасывается в атмосферу.
+   Это задача с рециклом: рвём контур tear-потоком (T резервуара) и сходимся
+   под-релаксацией (§2.5). Равновесие: тепло от газа = потери резервуара в среду. */
+function loopParams(){
+  const f=id=>parseFloat(el(id).value);
+  return {Toil0:f('l_Toil0'),mOil:f('l_mOil'),useCp:el('l_cp').value==='1',
+    dPpump:f('l_dPpump'),etaPump:f('l_etaPump'),
+    Cres:f('l_Cres'),UAamb:f('l_UAamb'),Tamb:f('l_Tamb'),
+    Thin:f('l_Thin'),mGas:f('l_mGas'),UA:f('l_UA')};
+}
+function loopCp(P,Tc){return P.useCp?oilCp(Tc+273.15):2.0;}
+// согласованный ε-NTU для утилизатора в контуре: cp масла фиксирован (тот же, что в балансе
+// резервуара), cp газа — при его собственной средней температуре. Это гарантирует точное
+// замыкание энергобаланса «тепло газа = тепло маслу» (в отличие от общего hxNTU, где cp масла
+// берётся при средней газ-масло температуре и даёт ~3% расхождение).
+function hxLoop(P,T1,cpOil){
+  const ThiK=P.Thin+273.15, TciK=T1+273.15, Cc=P.mOil*cpOil;
+  let Tg=P.Thin-30, q=0, T2=T1+40;
+  for(let it=0;it<8;it++){
+    const Ch=P.mGas*gasCp((ThiK+Tg+273.15)/2);
+    const Cmin=Math.max(Math.min(Ch,Cc),TINY),Cmax=Math.max(Ch,Cc),Cr=Cmin/Cmax,NTU=P.UA/Cmin;
+    const eps=Math.abs(1-Cr)<1e-6?NTU/(1+NTU):(1-Math.exp(-NTU*(1-Cr)))/(1-Cr*Math.exp(-NTU*(1-Cr)));
+    q=eps*Cmin*(ThiK-TciK); T2=T1+q/Cc; Tg=P.Thin-q/Ch;
+  }
+  return {T2,Qhru:q,Tgas_out:Tg};
+}
+// один обход контура при температуре масла в резервуаре Tres (°C)
+function loopPass(P,Tres){
+  const pr=oilProps(Tres+273.15), cp=loopCp(P,Tres);
+  // насос: рассеиваемая часть мощности (1-КПД) идёт в подогрев масла (обычно доли градуса)
+  const pumpPow=P.dPpump>0?P.dPpump*P.mOil/pr.rho:0;                 // кВт (P[кПа]·m[кг/с]/ρ)
+  const dTpump=pumpPow>0?pumpPow*(1-P.etaPump)/Math.max(P.mOil*cp,TINY):0;
+  const T1=Tres+dTpump;                                              // вход в утилизатор
+  const r=hxLoop(P,T1,cp);
+  return {T1,T2:r.T2,dTpump,pumpPow,Qhru:r.Qhru,Tgas_out:r.Tgas_out};
+}
+// стационар контура: рецикл tear-потоком + под-релаксация
+function loopSteady(P){
+  let Tres=P.Toil0, lam=0.7, hist=[], pass, iters=0;
+  for(let k=0;k<300;k++){
+    pass=loopPass(P,Tres); const cp=loopCp(P,Tres);
+    // баланс резервуара: mOil·cp·(T2−Tres) = UAamb·(Tres−Tamb)  ⇒  новая оценка Tres
+    const Tnew=(P.mOil*cp*pass.T2+P.UAamb*P.Tamb)/(P.mOil*cp+P.UAamb);
+    hist.push(Tres); const upd=Tres+lam*(Tnew-Tres); iters=k+1;
+    if(Math.abs(upd-Tres)<1e-7){Tres=upd;break;} Tres=upd;
+  }
+  hist.push(Tres); pass=loopPass(P,Tres);
+  return {Tres,...pass,Qamb:P.UAamb*(Tres-P.Tamb),iters,hist};
+}
+// динамика: резервуар как тепловая масса, утилизатор квазистационарен
+function loopDeriv(Tres,P){const pass=loopPass(P,Tres),cp=loopCp(P,Tres);
+  return (P.mOil*cp*(pass.T2-Tres)-P.UAamb*(Tres-P.Tamb))/Math.max(P.Cres,TINY);}
+// псевдо-«устройство» для общего решателя solveStep (x = T масла в резервуаре)
+function loopDevice(P){return {state0:()=>P.Toil0,deriv:x=>loopDeriv(x,P),
+  out:x=>{const pa=loopPass(P,x);return {Toil:x,Tgas_out:pa.Tgas_out,Qhru:pa.Qhru,Qamb:P.UAamb*(x-P.Tamb)};}};}
+
+// схема контура с «живыми» температурами
+function loopSchematic(P,S){
+  const T=v=>v.toFixed(1), Q=v=>v.toFixed(0);
+  return '<svg viewBox="0 0 720 250" width="100%" style="max-width:720px">'
+   +'<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">'
+   +'<path d="M0,0 L7,3 L0,6 Z" fill="#4ea1ff"/></marker>'
+   +'<marker id="arg" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">'
+   +'<path d="M0,0 L7,3 L0,6 Z" fill="#e0a83b"/></marker></defs>'
+   // резервуар
+   +'<rect x="30" y="95" width="150" height="80" rx="10" fill="#0c1117" stroke="#2a313c"/>'
+   +'<text x="105" y="120" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Резервуар</text>'
+   +'<text x="105" y="142" fill="#9aa7b4" font-size="12" text-anchor="middle">'+T(S.Tres)+' °C</text>'
+   +'<text x="105" y="160" fill="#9aa7b4" font-size="11" text-anchor="middle">потери '+Q(S.Qamb)+' кВт ↓</text>'
+   // насос
+   +'<circle cx="320" cy="135" r="34" fill="#0c1117" stroke="#2a313c"/>'
+   +'<text x="320" y="131" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Насос</text>'
+   +'<text x="320" y="149" fill="#9aa7b4" font-size="11" text-anchor="middle">'+Q(S.pumpPow)+' кВт</text>'
+   // утилизатор
+   +'<rect x="500" y="95" width="180" height="80" rx="10" fill="#0c1117" stroke="#2a313c"/>'
+   +'<text x="590" y="120" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">Утилизатор тепла</text>'
+   +'<text x="590" y="142" fill="#2ec27e" font-size="12" text-anchor="middle">Q = '+Q(S.Qhru)+' кВт → маслу</text>'
+   +'<text x="590" y="160" fill="#9aa7b4" font-size="11" text-anchor="middle">масло '+T(S.T1)+' → '+T(S.T2)+' °C</text>'
+   // нижний трубопровод: резервуар → насос → утилизатор
+   +'<line x1="180" y1="135" x2="286" y2="135" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
+   +'<line x1="354" y1="135" x2="500" y2="135" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
+   // верхний возврат: утилизатор → резервуар
+   +'<polyline points="590,95 590,55 105,55 105,95" fill="none" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>'
+   +'<text x="347" y="48" fill="#4ea1ff" font-size="11" text-anchor="middle">горячее масло '+T(S.T2)+' °C → в резервуар</text>'
+   // дымовой газ снизу-вверх через утилизатор
+   +'<line x1="560" y1="245" x2="560" y2="175" stroke="#e0a83b" stroke-width="3" marker-end="url(#arg)"/>'
+   +'<line x1="620" y1="95" x2="620" y2="24" stroke="#e0a83b" stroke-width="3" marker-end="url(#arg)"/>'
+   +'<text x="560" y="238" fill="#e0a83b" font-size="11" text-anchor="middle">дымовой газ '+T(P.Thin)+' °C</text>'
+   +'<text x="620" y="14" fill="#e0a83b" font-size="11" text-anchor="middle">→ в атмосферу '+T(S.Tgas_out)+' °C</text>'
+   +'</svg>';
+}
+
+function runLoop(){
+  const P=loopParams();
+  const lo=parseFloat(el('l_lo').value),hi=parseFloat(el('l_hi').value);
+  const scheme=el('l_solver').value,Ttot=parseFloat(el('l_Ttot').value),dt=parseFloat(el('l_dt').value);
+  el('cstatus').textContent='Расчёт контура...';
+  setTimeout(()=>{
+    const S=loopSteady(P), dev=loopDevice(P), inb=S.Tres>=lo&&S.Tres<=hi;
+    // схема контура
+    el('loopSchema').innerHTML=loopSchematic(P,S);
+    // KPI
+    el('lkpis').innerHTML=
+      '<div class="kpi '+(inb?'ok':'bad')+'"><b>'+S.Tres.toFixed(1)+' °C</b><span>T масла в контуре <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'
+      +'<div class="kpi"><b>'+S.Qhru.toFixed(0)+' кВт</b><span>тепло от газа (утилизатор)</span></div>'
+      +'<div class="kpi"><b>'+S.Tgas_out.toFixed(1)+' °C</b><span>газ на выбросе в атмосферу</span></div>'
+      +'<div class="kpi"><b>'+S.Qamb.toFixed(0)+' кВт</b><span>потери в среду (резервуар)</span></div>'
+      +'<div class="kpi"><b>'+S.iters+'</b><span>итераций рецикла</span></div>';
+    // график 1: переходный нагрев контура (выбранная схема) + равновесие + полоса интервала
+    let tr=[];
+    if(scheme==='steady'){tr=[{x:[0,Ttot],y:[S.Tres,S.Tres],mode:'lines',line:{width:2.4,color:COLORS[1]},name:'стационар'}];}
+    else{const r=solveStep(dev,null,'Toil',dt,Ttot,scheme);
+      tr=[{x:r.t,y:r.y,mode:'lines',line:{width:2.4,color:COLORS[0]},name:(scheme==='implicit'?'неявный':'явный')+' Эйлер, Δt='+dt+' с'},
+          {x:[0,Ttot],y:[S.Tres,S.Tres],mode:'lines',line:{width:1.4,dash:'dot',color:COLORS[1]},name:'равновесие'}];}
+    const lay1=layout('Нагрев масла в контуре до равновесия','время, с','T масла, °C');
+    lay1.shapes=[{type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}}];
+    Plotly.newPlot('plotLoopT',tr,lay1,cfg());
+    // график 2: сходимость рецикла (tear-поток + под-релаксация)
+    const it=S.hist.map((_,i)=>i);
+    const lay2=layout('Сходимость рецикла: T резервуара по итерациям (под-релаксация λ=0.7)','итерация','T масла, °C');
+    Plotly.newPlot('plotLoopConv',[{x:it,y:S.hist,mode:'lines+markers',line:{color:COLORS[2]},marker:{size:6},name:'tear-поток'}],lay2,cfg());
+    // таблица энергобаланса по узлам контура
+    let html='<table><tr><th>узел</th><th>T масла,°C</th><th>примечание</th></tr>'
+      +'<tr><td>Резервуар (выход)</td><td>'+S.Tres.toFixed(1)+'</td><td>tear-поток контура</td></tr>'
+      +'<tr><td>После насоса</td><td>'+S.T1.toFixed(1)+'</td><td>+'+S.dTpump.toFixed(2)+' °C от насоса ('+S.pumpPow.toFixed(0)+' кВт)</td></tr>'
+      +'<tr><td>Выход утилизатора</td><td>'+S.T2.toFixed(1)+'</td><td>+'+(S.T2-S.T1).toFixed(1)+' °C, Q='+S.Qhru.toFixed(0)+' кВт</td></tr>'
+      +'</table><table style="margin-top:8px"><tr><th>энергобаланс контура</th><th>кВт</th></tr>'
+      +'<tr><td>приход: тепло от дымового газа</td><td>'+S.Qhru.toFixed(0)+'</td></tr>'
+      +'<tr><td>приход: рассеяние насоса</td><td>'+(S.pumpPow*(1-P.etaPump)).toFixed(0)+'</td></tr>'
+      +'<tr><td>расход: потери в среду</td><td>'+S.Qamb.toFixed(0)+'</td></tr>'
+      +'<tr><td>невязка</td><td>'+(S.Qhru+S.pumpPow*(1-P.etaPump)-S.Qamb).toFixed(2)+'</td></tr>'
+      +'<tr><td>дымовой газ: '+P.Thin.toFixed(0)+' °C → выброс '+S.Tgas_out.toFixed(1)+' °C</td><td>—</td></tr></table>';
+    el('loopTable').innerHTML=html;
+    el('cstatus').textContent='Готово · равновесие '+S.Tres.toFixed(1)+' °C за '+S.iters+' итераций рецикла';
+  },20);
+}
+function setTopology(){const t=el('topology').value,loop=t==='loop';
+  el('panel-open').classList.toggle('hide',loop); el('panel-loop').classList.toggle('hide',!loop);
+  el('main-open').classList.toggle('hide',loop);  el('main-loop').classList.toggle('hide',!loop);
+  loop?runLoop():runChain();
+}
+
+/* ===================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ===================== */
+function setMode(m){
+  el('view-single').classList.toggle('hide',m!=='single');
+  el('view-chain').classList.toggle('hide',m!=='chain');
+  el('tab-single').classList.toggle('on',m==='single');
+  el('tab-chain').classList.toggle('on',m==='chain');
+  if(m==='chain'){if(!UNITS.length){UNITS=[{type:'HRU',Th_in:585,mdot_h:20,UA:8},{type:'FHE',Th_in:700,mdot_h:20,UA:7},{type:'EOH',Power:180}];}renderUnits();el('topology').value==='loop'?runLoop():runChain();}
+}
+
+/* init */
+buildDeviceSelect(); onDevice(); buildDtChips(); el('solver').onchange=solverNote; solverNote(); runSingle();
+</script>
+</body>
+</html>

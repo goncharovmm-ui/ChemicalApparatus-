@@ -62,6 +62,7 @@
     <div class="tab on" id="tab-apps" onclick="setMode('apps')">Аппараты · модель/тесты</div>
     <div class="tab" id="tab-chain" onclick="setMode('chain')">Связка (цепочка)</div>
     <div class="tab" id="tab-props" onclick="setMode('props')">Свойства потоков</div>
+    <div class="tab" id="tab-summary" onclick="setMode('summary')">Сводка по аппарату</div>
   </div>
 </header>
 
@@ -199,6 +200,29 @@
     <div class="card"><div id="a_params"></div></div>
     <h3 id="a_stitle">Сенсоры (выходы модели)</h3>
     <div class="card"><div id="a_sensors"></div></div>
+  </main>
+</div>
+
+<!-- ============ РЕЖИМ: СВОДКА ПО АППАРАТУ ============ -->
+<div class="wrap hide" id="view-summary">
+  <aside class="side">
+    <h3>Аппарат</h3>
+    <select id="sm_dev" onchange="renderSummary()"></select>
+    <div class="note" style="margin-top:10px">Сводная таблица по всем тестовым режимам аппарата.
+      Три блока: <b>1)</b> геометрические (постоянные) параметры — одинаковы для всех тестов,
+      сведены в одно значение; <b>2)</b> параметры аппарата, различающиеся по тестам;
+      <b>3)</b> параметры режима в порядке паспортной таблицы «Вариант 710» с модельными значениями.
+      В последнем столбце <b>✓</b>, если все зачётные параметры (расходы, температуры, LMTD, Q)
+      отличаются от паспортных не более чем на <b>5 %</b>. Перепады давления (ΔP1 модель не считает,
+      ΔP2 корреляция завышает) и проектный «запас» показаны, но в зачёт не входят.</div>
+  </aside>
+  <main class="main">
+    <div class="kpis" id="sm_kpis"></div>
+    <h3>Блок 1 · Геометрические параметры (одинаковы для всех тестов)</h3>
+    <div class="card"><div id="sm_geom"></div></div>
+    <h3>Блоки 2–3 · Параметры аппарата по тестам и параметры режима</h3>
+    <div class="card" style="overflow-x:auto"><div id="sm_table"></div></div>
+    <div class="note" id="sm_note" style="margin-top:8px"></div>
   </main>
 </div>
 
@@ -1057,18 +1081,114 @@ function renderProps(){const st=el('pr_stream').value;
     air:'<b>Воздух</b> (справочные данные, 1 атм): ρ=352.9/T (M=28.97), cp≈0.946+1.96·10⁻⁴·T, λ линейная, μ — формула Сазерленда. Окислитель в смесителе.'};
   el('pr_note').innerHTML=notes[st];}
 
+/* ===================== СВОДКА ПО АППАРАТУ ===================== */
+// паспортная таблица «Вариант 710» (утилизатор HRU) — опорные значения для 7 режимов по внешней температуре.
+// ключ — значение LMTD из имени теста (уникально для каждого режима).
+const SUMM_HRU_REF={rows:{
+  '168.7' :{full:363.33,hru:285,byp:78.33 ,gin:507.6 ,gout:336,dp1:1536,lmtd:168.70},
+  '203.58':{full:440.78,hru:261,byp:179.78,gin:547.8 ,gout:362,dp1:1420,lmtd:203.58},
+  '204.95':{full:360.78,hru:261,byp:99.78 ,gin:548.97,gout:363,dp1:1420,lmtd:204.95},
+  '214.53':{full:418.38,hru:260,byp:158.38,gin:557.65,gout:371,dp1:1426,lmtd:214.53},
+  '217.59':{full:391.45,hru:255,byp:136.45,gin:562.8 ,gout:373,dp1:1398,lmtd:217.59},
+  '219.03':{full:384.99,hru:240,byp:144.99,gin:572.25,gout:370,dp1:1304,lmtd:219.03},
+  '222.8' :{full:342.44,hru:225,byp:117.44,gin:584.82,gout:370,dp1:1217,lmtd:222.80}},
+  cst:{oilIn:185.06,oilOut:262,mOil:311.0018,dp2:0.479,reserve:10,Q:56351.57}};
+function summRefRow(app,t){if(app!=='HRU')return null;const m=(t.name||'').match(/LMTD ([\d.]+)/);return m?SUMM_HRU_REF.rows[m[1]]:null;}
+// столбцы блока 3 (порядок как в паспортной таблице). cnt:1 — участвует в проверке 5%.
+function summCols(app){
+  if(app==='HRU')return [
+   {h:'Расход ГТУ',u:'кг/с',get:s=>s.GAS_MF_FULL,ref:(r,c)=>r?r.full:null,cnt:1,d:2},
+   {h:'на УТО',u:'кг/с',get:s=>s.GAS_MF_HRU,ref:(r,c)=>r?r.hru:null,cnt:1,d:2},
+   {h:'на байпас',u:'кг/с',get:s=>s.GAS_MF_BP,ref:(r,c)=>r?r.byp:null,cnt:1,d:2},
+   {h:'Т пр.сг.Вх',u:'°C',get:s=>s.GAS_IN_TEMP,ref:(r,c)=>r?r.gin:null,cnt:1,d:1},
+   {h:'Т пр.сг.Вых',u:'°C',get:s=>s.T_EG_after_HE,ref:(r,c)=>r?r.gout:null,cnt:1,d:1},
+   {h:'ΔP1 УТО',u:'Па',get:s=>null,ref:(r,c)=>r?r.dp1:null,cnt:0,d:0,na:'не считается'},
+   {h:'Т масла Вх',u:'°C',get:s=>s.OIL_IN_TEMP,ref:(r,c)=>r?c.oilIn:null,cnt:1,d:2},
+   {h:'Т масла Вых',u:'°C',get:s=>s.OIL_OUT_TEMP,ref:(r,c)=>r?c.oilOut:null,cnt:1,d:1},
+   {h:'Расход масла',u:'кг/с',get:s=>s.OIL_MF,ref:(r,c)=>r?c.mOil:null,cnt:1,d:2},
+   {h:'ΔP2 УТО',u:'кгс/см²',get:s=>s.DELTA_P_OIL/98.0665,ref:(r,c)=>r?c.dp2:null,cnt:0,d:3,na:'не в зачёте'},
+   {h:'LMTD',u:'°C',get:s=>s.ID_SENSOR_LMTDCC,ref:(r,c)=>r?r.lmtd:null,cnt:1,d:2},
+   {h:'Запас',u:'%',get:s=>null,ref:(r,c)=>r?c.reserve:null,cnt:0,d:0,na:'проект'},
+   {h:'Тепл. мощность',u:'кВт',get:s=>s.Q,ref:(r,c)=>r?c.Q:null,cnt:1,d:0}];
+  // общий набор для CHE/FHE/EOH: ключевые выходные сенсоры, эталон — из граничных условий (bc.ref)
+  return [
+   {h:'Т газа Вх',u:'°C',get:s=>s.GAS_IN_TEMP,ref:()=>null,cnt:0,d:1},
+   {h:'Т газа Вых',u:'°C',get:s=>s.GAS_OUT_TEMP,ref:(r,c,t)=>t.bc.gas&&t.bc.gas.ref,cnt:1,d:1},
+   {h:'Т масла Вх',u:'°C',get:s=>s.OIL_IN_TEMP!=null?s.OIL_IN_TEMP:s.T_in_oil,ref:()=>null,cnt:0,d:1},
+   {h:'Т масла Вых',u:'°C',get:s=>s.OIL_OUT_TEMP!=null?s.OIL_OUT_TEMP:s.T_out_oil,ref:(r,c,t)=>t.bc.oil&&t.bc.oil.ref,cnt:1,d:1},
+   {h:'Q',u:'кВт',get:s=>s.Q!=null?s.Q:s.Q_from_TEH_bundle_to_oil,ref:()=>null,cnt:0,d:0}];
+}
+function buildSummarySelect(){const s=el('sm_dev');if(s.options.length)return;
+  APP_LIST.forEach(a=>{if(!APPDATA.params[a])return;const o=document.createElement('option');o.value=a;o.textContent=APP_TITLE[a]||a;s.appendChild(o);});
+  if([...s.options].some(o=>o.value==='HRU'))s.value='HRU';}  // по умолчанию — утилизатор (паспортная таблица)
+function fmtNum(v,d){return (v==null||!isFinite(v))?'—':(Math.abs(v)>=1000?v.toFixed(0):v.toFixed(d));}
+function renderSummary(){
+  const app=el('sm_dev').value, tests=APPDATA.tests[app]||[], params=APPDATA.params[app]||[];
+  const valOf=(t,p)=>{const v=t.params&&t.params[p.n];return (v!=null)?v:p.v;};
+  // разбивка параметров: постоянные (блок 1) и различающиеся по тестам (блок 2)
+  const constP=[],varyP=[];
+  params.forEach(p=>{const u=new Set(tests.map(t=>{const v=valOf(t,p);return typeof v==='number'?Math.round(v*1e6)/1e6:v;}));(u.size<=1?constP:varyP).push(p);});
+  // расчёт модели по каждому тесту
+  const SENS=tests.map(t=>{try{const mp=Object.assign({},...params.map(p=>({[p.n]:valOf(t,p)})));return PHYS.run(app,mp,JSON.parse(JSON.stringify(t.bc))).sensors;}catch(e){return null;}});
+  // ---- Блок 1: геометрия (одно значение на все тесты) ----
+  let g='<table class="atbl"><tr><th>параметр</th><th>описание</th><th>значение</th><th>ед.</th></tr>';
+  constP.forEach(p=>{g+='<tr><td><code>'+p.n+'</code></td><td>'+p.d+'</td><td><b>'+valOf(tests[0],p)+'</b></td><td>'+(p.u||'—')+'</td></tr>';});
+  g+='</table>'; el('sm_geom').innerHTML=constP.length?g:'<div class="note">нет постоянных параметров</div>';
+  // ---- Блоки 2–3: таблица по тестам ----
+  const cols=summCols(app);
+  let h='<table class="atbl"><tr><th rowspan="2">Тест</th>';
+  if(varyP.length)h+='<th colspan="'+varyP.length+'" style="text-align:center">Блок 2 · параметры аппарата (различаются)</th>';
+  h+='<th colspan="'+cols.length+'" style="text-align:center">Блок 3 · параметры режима (как в паспорте)</th>';
+  h+='<th rowspan="2">✓ ≤5%</th></tr><tr>';
+  varyP.forEach(p=>h+='<th title="'+p.d.replace(/"/g,'')+'"><code>'+p.n+'</code><br><span style="font-weight:400">'+(p.u||'')+'</span></th>');
+  cols.forEach(c=>h+='<th>'+c.h+'<br><span style="font-weight:400">'+c.u+'</span></th>');
+  h+='</tr>';
+  const cst=SUMM_HRU_REF.cst;
+  tests.forEach((t,i)=>{const s=SENS[i], rr=summRefRow(app,t);
+    h+='<tr><td style="text-align:left">'+t.name+'</td>';
+    varyP.forEach(p=>h+='<td>'+valOf(t,p)+'</td>');
+    let worst=-1, hasRef=false, allok=true;
+    cols.forEach(c=>{const mv=s?c.get(s):null, rv=c.ref(rr,cst,t);
+      let cell, style='';
+      if(mv==null){cell=c.na?('<span style="color:var(--muted)">'+c.na+'</span>'):'—';}
+      else{cell=fmtNum(mv,c.d);
+        if(c.cnt&&rv!=null&&isFinite(rv)){const dev=Math.abs(100*(mv-rv)/(rv||1));hasRef=true;if(dev>worst)worst=dev;const ok=dev<=5;if(!ok)allok=false;
+          style=ok?'color:#2ec27e':'color:#e0736b;font-weight:600';
+          cell+='<br><span style="font-size:11px;'+style+'">'+(mv-rv>=0?'+':'')+(100*(mv-rv)/(rv||1)).toFixed(1)+'% (пасп '+fmtNum(rv,c.d)+')</span>';}
+        else if(rv!=null&&isFinite(rv)){cell+='<br><span style="font-size:11px;color:var(--muted)">пасп '+fmtNum(rv,c.d)+'</span>';}
+      }
+      h+='<td'+(style&&c.cnt?' style="'+style+'"':'')+'>'+cell+'</td>';});
+    const verdict=!hasRef?'<span style="color:var(--muted)">нет пасп.</span>':(allok?'<span style="color:#2ec27e;font-size:18px">✓</span>':'<span style="color:#e0736b">Δ'+worst.toFixed(1)+'%</span>');
+    h+='<td>'+verdict+'</td></tr>';});
+  h+='</table>'; el('sm_table').innerHTML=h;
+  // KPI + note
+  const nRef=tests.filter(t=>summRefRow(app,t)).length;
+  el('sm_kpis').innerHTML='<div class="kpi"><b>'+app+'</b><span>'+(APP_TITLE[app]||'').replace(/^[^—]*— /,'')+'</span></div>'
+    +'<div class="kpi"><b>'+tests.length+'</b><span>тестовых режимов</span></div>'
+    +'<div class="kpi"><b>'+constP.length+'</b><span>геом. (постоянных) параметров</span></div>'
+    +'<div class="kpi"><b>'+varyP.length+'</b><span>различающихся параметров</span></div>';
+  el('sm_note').innerHTML=app==='HRU'
+    ?('Эталон — паспортная таблица «Вариант работы 710» ('+nRef+' режимов по внешней температуре). '
+      +'Зачёт (✓) — по расходам ГТУ/УТО/байпас, температурам газа и масла, LMTD и тепловой мощности Q. '
+      +'ΔP1 (модель не воспроизводит перепад по газу), ΔP2 (корреляция по маслу завышена) и проектный «запас 10 %» показаны, но в проверку 5 % не входят.')
+    :('Эталон — контрольные значения из граничных условий тестов (bc.ref): выход масла и, где задан, выход газа. Остальные сенсоры показаны без сверки.');
+}
+
 /* ===================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ===================== */
 function setMode(m){
   el('view-chain').classList.toggle('hide',m!=='chain');
   el('view-apps').classList.toggle('hide',m!=='apps');
   el('view-props').classList.toggle('hide',m!=='props');
+  el('view-summary').classList.toggle('hide',m!=='summary');
   el('tab-chain').classList.toggle('on',m==='chain');
   el('tab-apps').classList.toggle('on',m==='apps');
   el('tab-props').classList.toggle('on',m==='props');
+  el('tab-summary').classList.toggle('on',m==='summary');
   if(m==='chain'){initLStat();
     if(el('topology').value==='loop')runLoop();else runChain();}
   if(m==='apps'){if(!el('a_dev').options.length){buildAppSelect();}onApp();}
   if(m==='props'){renderProps();}
+  if(m==='summary'){if(!el('sm_dev').options.length)buildSummarySelect();renderSummary();}
 }
 
 /* init — стартуем на вкладке «Аппараты» */

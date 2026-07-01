@@ -73,8 +73,10 @@
     <select id="topology" onchange="setTopology()">
       <option value="loop">Замкнутый контур масла (насос + резервуар + утилизатор)</option>
       <option value="open">Открытая цепочка (масло проходит насквозь)</option>
+      <option value="furnace">Печь ОПГМ: смеситель → FHE (радиация) → CHE (конвекция)</option>
     </select>
 
+    <div id="stationsBlock">
     <h3>Станции (аппараты) <span class="note" style="display:inline">(масло по порядку; ▲▼ — переставить; ⚙ — все параметры)</span></h3>
     <div id="lunits"></div>
     <div class="row">
@@ -87,6 +89,7 @@
         <option value="LOAD">Потребитель (масло→процесс)</option>
       </select></div>
       <div><button class="run sec" style="margin:0" onclick="addLStat()">+ станция</button></div>
+    </div>
     </div>
 
     <!-- ----- ПАНЕЛЬ: ОТКРЫТАЯ ЦЕПОЧКА ----- -->
@@ -145,6 +148,26 @@
       </div>
       <button class="run" onclick="runLoop()">▶ Рассчитать контур</button>
     </div>
+    <!-- ----- ПАНЕЛЬ: ПЕЧЬ ОПГМ (смеситель → FHE → CHE) ----- -->
+    <div id="panel-furnace" class="hide">
+      <h3>Топливо (идеальный смеситель)</h3>
+      <div class="row3">
+        <div><label>CH₄, кг/с</label><input id="f_mCH4" type="number" step="0.05" value="0.9"></div>
+        <div><label>Избыток возд. α</label><input id="f_alpha" type="number" step="0.05" value="1.15"></div>
+        <div><label>T смеси, °C</label><input id="f_Tmix" type="number" value="20"></div>
+      </div>
+      <h3>Масло (вход сверху в CHE)</h3>
+      <div class="row">
+        <div><label>T масла вход, °C</label><input id="f_Toil" type="number" value="120"></div>
+        <div><label>Расход масла, кг/с</label><input id="f_mOil" type="number" value="100"></div>
+      </div>
+      <button class="run" onclick="runFurnaceChain()">▶ Рассчитать печь</button>
+      <div class="note" style="margin-top:8px">Воздух и метан смешиваются в <b>идеальном смесителе</b>
+        и снизу подаются в <b>FHE</b> (радиантная камера): смесь сгорает → дымовые газы идут
+        <b>снизу вверх</b> через узел в <b>CHE</b> (конвективная камера) и в трубу.
+        Масло идёт навстречу: сверху в <b>CHE</b> (конвекция), через узел — в <b>FHE</b>
+        (излучение + конвекция), выход — в верхней части FHE.</div>
+    </div>
     <div class="note" id="cstatus"></div>
   </aside>
   <main class="main">
@@ -164,6 +187,20 @@
       <div class="card"><div id="plotLoopConv" style="height:300px"></div></div>
       <div class="card"><div id="loopTable"></div></div>
       <div class="note">Замкнутый контур — задача с рециклом: масло циркулирует Резервуар → Насос → Утилизатор → Резервуар, нагреваясь дымовым газом; газ после отдачи тепла выбрасывается в атмосферу. Стационар ищется разрывом рецикла tear-потоком и под-релаксацией (§2.5 рекомендаций); равновесие — баланс «тепло от газа = потери в среду». Все три схемы сходятся к одному значению.</div>
+    </div>
+    <!-- ----- ВЫВОД: ПЕЧЬ ОПГМ ----- -->
+    <div id="main-furnace" class="hide">
+      <div class="kpis" id="fkpis"></div>
+      <div class="card"><div id="furnSchema"></div></div>
+      <h3>Сенсоры FHE (радиантная камера)</h3>
+      <div class="card"><div id="furnSensF"></div></div>
+      <h3>Сенсоры CHE (конвективная камера)</h3>
+      <div class="card"><div id="furnSensC"></div></div>
+      <div class="note">Связка ОПГМ: противоток по аппаратам — газ идёт снизу вверх
+        (смеситель → FHE → узел газа → CHE → труба), масло навстречу сверху вниз по газовому тракту
+        (вход → CHE → узел масла → FHE → выход в верхней части FHE). Стационар — фикс-точка по температуре
+        узла масла (выход CHE = вход FHE); обе камеры — полные модели (α из геометрии, FHE учитывает
+        горение CH₄ и радиацию, CHE — конвекцию оребрённого пучка).</div>
     </div>
   </main>
 </div>
@@ -992,11 +1029,104 @@ function runLoop(){
   },20);
 }
 function initLStat(){if(!LSTAT.length)LSTAT=['FURN','HRU','EOH','LOAD'].map(defLStat);renderLStat();}
-function setTopology(){const t=el('topology').value,loop=t==='loop';
-  el('panel-open').classList.toggle('hide',loop); el('panel-loop').classList.toggle('hide',!loop);
-  el('main-open').classList.toggle('hide',loop);  el('main-loop').classList.toggle('hide',!loop);
+function setTopology(){const t=el('topology').value;
+  el('panel-open').classList.toggle('hide',t!=='open');   el('main-open').classList.toggle('hide',t!=='open');
+  el('panel-loop').classList.toggle('hide',t!=='loop');   el('main-loop').classList.toggle('hide',t!=='loop');
+  el('panel-furnace').classList.toggle('hide',t!=='furnace'); el('main-furnace').classList.toggle('hide',t!=='furnace');
+  el('stationsBlock').classList.toggle('hide',t==='furnace');   // печь ОПГМ — фиксированная связка FHE+CHE
+  if(t==='furnace'){runFurnaceChain();return;}
   initLStat();
-  if(loop)runLoop();else runChain();
+  if(t==='loop')runLoop();else runChain();
+}
+
+/* ===================== ПЕЧЬ ОПГМ: смеситель → FHE (радиация) → CHE (конвекция) ===================== */
+// идеальный смеситель: CH₄ + воздух (α — избыток); мольные доли для модели FHE (fr[0]=CH₄, fr[4]=O₂)
+function idealMixer(mCH4,a,TmixC){
+  const mAir=a*L0_CH4*mCH4, mMix=mAir+mCH4;
+  const nCH4=mCH4/16, nAir=mAir/28.97, nT=nCH4+nAir;
+  return {mCH4,mAir,mMix,T:TmixC,fr:[nCH4/nT,0,0,0.79*nAir/nT,0.21*nAir/nT,0],
+    cpMix:(mCH4*PHYS.methaneP(TmixC+273.15).cp+mAir*PHYS.airP(TmixC+273.15).cp)/Math.max(mMix,TINY)};
+}
+function runFurnaceChain(){
+  const inp={mCH4:parseFloat(el('f_mCH4').value)||0.9, alpha:parseFloat(el('f_alpha').value)||1.15,
+    Tmix:parseFloat(el('f_Tmix').value)||20, Toil:parseFloat(el('f_Toil').value)||120, mOil:parseFloat(el('f_mOil').value)||100};
+  const pF=Object.assign({},...APPDATA.params.FHE.map(p=>({[p.n]:p.v})));
+  const pC=Object.assign({},...APPDATA.params.CHE.map(p=>({[p.n]:p.v})));
+  const mx=idealMixer(inp.mCH4,inp.alpha,inp.Tmix);
+  // фикс-точка по температуре узла масла: масло CHE→FHE, газ FHE→CHE (противоток по аппаратам)
+  let ToilNode=inp.Toil+20, rF=null, rC=null, iters=0;
+  for(let it=0;it<60;it++){iters=it+1;
+    rF=PHYS.run('FHE',pF,{gas:{T:mx.T,m:mx.mMix,fr:mx.fr,Pin:103,Pout:101},oil:{T:ToilNode,m:inp.mOil,Pin:1300,Pout:1100}});
+    rC=PHYS.run('CHE',pC,{gas:{T:rF.sensors.GAS_OUT_TEMP,m:mx.mMix,fr:mx.fr,Pin:102,Pout:101},oil:{T:inp.Toil,m:inp.mOil,Pin:1300,Pout:1100}});
+    const Tn=rC.sensors.OIL_OUT_TEMP;
+    if(Math.abs(Tn-ToilNode)<1e-4){ToilNode=Tn;break;}
+    ToilNode=0.5*ToilNode+0.5*Tn;
+  }
+  const sF=rF.sensors, sC=rC.sensors;
+  const F={mx,inp,iters,Tflame:rF.extra['T_пламени,°C'],Qcomb:rF.extra['Q_сгор,кВт'],Qrad:rF.extra['Q_рад,кВт'],
+    TgasNode:sF.GAS_OUT_TEMP, ToilNode, Tstack:sC.GAS_OUT_TEMP, ToilOut:sF.OIL_OUT_TEMP,
+    QF:sF.Q, QC:sC.Q};
+  el('fkpis').innerHTML=
+    '<div class="kpi"><b>'+F.ToilOut.toFixed(1)+' °C</b><span>масло на выходе (верх FHE)</span></div>'
+    +'<div class="kpi"><b>'+F.Tflame.toFixed(0)+' °C</b><span>T пламени (сгорание CH₄)</span></div>'
+    +'<div class="kpi"><b>'+F.TgasNode.toFixed(1)+' °C</b><span>узел газа FHE→CHE</span></div>'
+    +'<div class="kpi"><b>'+F.ToilNode.toFixed(1)+' °C</b><span>узел масла CHE→FHE</span></div>'
+    +'<div class="kpi"><b>'+F.Tstack.toFixed(1)+' °C</b><span>дым. газы в трубу</span></div>'
+    +'<div class="kpi"><b>'+F.Qcomb.toFixed(0)+' кВт</b><span>Q сгорания</span></div>'
+    +'<div class="kpi"><b>'+(F.QF+F.QC).toFixed(0)+' кВт</b><span>Q маслу (FHE '+F.QF.toFixed(0)+' + CHE '+F.QC.toFixed(0)+')</span></div>';
+  el('furnSchema').innerHTML=furnaceSchematic(F);
+  const senTbl=(app,s)=>{let h='<table class="atbl"><tr><th>сенсор</th><th>описание</th><th>значение</th></tr>';
+    APPDATA.sensors[app].forEach(x=>{const v=s[x.n];h+='<tr><td><code>'+x.n+'</code></td><td>'+x.d+'</td><td>'+(v!=null&&isFinite(v)?(Math.abs(v)<10?v.toFixed(4):v.toFixed(2)):'—')+'</td></tr>';});
+    return h+'</table>';};
+  el('furnSensF').innerHTML=senTbl('FHE',sF);
+  el('furnSensC').innerHTML=senTbl('CHE',sC);
+  el('cstatus').innerHTML='Печь ОПГМ рассчитана · фикс-точка узла масла за '+iters+' итер.';
+}
+// вертикальная схема: газ снизу вверх (смеситель → FHE → узел → CHE → труба), масло сверху (CHE → узел → FHE)
+function furnaceSchematic(F){
+  const W=900,H=680, T=v=>v.toFixed(1);
+  let s='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:'+W+'px;display:block;margin:0 auto">';
+  s+='<defs><marker id="fa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#e0a83b"/></marker>'
+    +'<marker id="fo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#4ea1ff"/></marker>'
+    +'<marker id="fg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#2ec27e"/></marker>'
+    +'<marker id="fc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#39c5cf"/></marker></defs>';
+  const ln=(x1,y1,x2,y2,c,m)=>'<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+c+'" stroke-width="2.4" marker-end="url(#'+m+')"/>';
+  const node=(x,y,c)=>'<circle cx="'+x+'" cy="'+y+'" r="7" fill="#0c1117" stroke="'+c+'" stroke-width="2.4"/>';
+  // ---- аппараты: CHE сверху, FHE снизу (газ идёт снизу вверх) ----
+  s+=svgBx(330,130,240,110)+svgTx(450,155,'#e6edf3','CHE — конвективная камера',null,13,'600')
+    +svgTx(450,175,'#8b949e','газ '+T(F.TgasNode)+'→'+T(F.Tstack)+' °C',null,10)
+    +svgTx(450,192,'#8b949e','масло '+T(F.inp.Toil)+'→'+T(F.ToilNode)+' °C',null,10)
+    +svgTx(450,212,'#2ec27e','Q = '+F.QC.toFixed(0)+' кВт (конвекция)',null,11);
+  s+=svgBx(330,350,240,130)+svgTx(450,375,'#e6edf3','FHE — радиантная камера',null,13,'600')
+    +svgTx(450,395,'#8b949e','масло '+T(F.ToilNode)+'→'+T(F.ToilOut)+' °C',null,10)
+    +svgTx(450,412,'#2ec27e','Q = '+F.QF.toFixed(0)+' кВт (излучение + конвекция)',null,11)
+    +svgTx(450,443,'#e0736b','🔥 пламя '+F.Tflame.toFixed(0)+' °C · сгорание CH₄',null,11,'600')
+    +svgTx(450,462,'#8b949e','Q сгор = '+F.Qcomb.toFixed(0)+' кВт',null,10);
+  // ---- газовый тракт (снизу вверх) ----
+  s+=ln(400,350,400,247,'#e0a83b','fa')+node(400,295,'#e0a83b')
+    +svgTx(388,290,'#e0a83b','узел газа','end',11,'600')+svgTx(388,305,'#e0a83b',T(F.TgasNode)+' °C','end',11);
+  s+=ln(400,130,400,62,'#e0a83b','fa')
+    +svgTx(400,52,'#e0a83b','дым. газы → труба · '+T(F.Tstack)+' °C · '+F.mx.mMix.toFixed(2)+' кг/с',null,11,'600');
+  // ---- масляный тракт: вход сверху в CHE → узел → FHE → выход в верхней части FHE ----
+  s+=ln(505,62,505,130,'#4ea1ff','fo')
+    +svgTx(516,80,'#4ea1ff','Вход масла','start',11,'600')+svgTx(516,95,'#4ea1ff',T(F.inp.Toil)+' °C · '+F.inp.mOil.toFixed(0)+' кг/с','start',10);
+  s+=ln(505,240,505,350,'#4ea1ff','fo')+node(505,295,'#4ea1ff')
+    +svgTx(518,290,'#4ea1ff','узел масла','start',11,'600')+svgTx(518,305,'#4ea1ff',T(F.ToilNode)+' °C','start',11);
+  s+=ln(330,372,240,372,'#4ea1ff','fo')
+    +svgTx(232,362,'#4ea1ff','Выход масла','end',11,'600')+svgTx(232,377,'#4ea1ff',T(F.ToilOut)+' °C','end',11)
+    +svgTx(232,392,'#8b949e','(верх радиантной зоны)','end',9);
+  // ---- низ: узлы воздуха и метана → идеальный смеситель → в FHE снизу ----
+  s+=svgBx(300,600,110,34)+svgTx(355,622,'#39c5cf','Воздух',null,12,'600')
+    +svgTx(355,648,'#8b949e',F.mx.mAir.toFixed(2)+' кг/с · '+T(F.inp.Tmix)+' °C',null,9);
+  s+=svgBx(490,600,110,34)+svgTx(545,622,'#2ec27e','CH₄ (метан)',null,12,'600')
+    +svgTx(545,648,'#8b949e',F.mx.mCH4.toFixed(2)+' кг/с · '+T(F.inp.Tmix)+' °C',null,9);
+  s+=svgBx(375,530,150,34)+svgTx(450,552,'#e6edf3','Идеальный смеситель',null,11,'600');
+  s+=ln(370,600,420,568,'#39c5cf','fc')+ln(530,600,480,568,'#2ec27e','fg');
+  s+=ln(450,530,450,484,'#e0a83b','fa')
+    +svgTx(462,505,'#e0a83b','топл. смесь','start',10,'600')
+    +svgTx(462,519,'#e0a83b',F.mx.mMix.toFixed(2)+' кг/с · α='+F.inp.alpha+' · '+T(F.inp.Tmix)+' °C','start',9);
+  s+=svgTx(30,660,'#8b949e','газ: снизу вверх (смеситель→FHE→узел→CHE→труба) · масло: сверху (вход→CHE→узел→FHE→выход вверху FHE)','start',10);
+  return s+'</svg>';
 }
 
 /* ===================== АППАРАТЫ: параметры/сенсоры/тесты из C++ ===================== */

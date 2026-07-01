@@ -209,6 +209,8 @@
     <select id="pr_stream" onchange="onPropStream()">
       <option value="oil">Масло THERMINOL 59</option>
       <option value="gas">Дымовые газы на УТ</option>
+      <option value="methane">Метан (газ)</option>
+      <option value="air">Воздух</option>
     </select>
     <div class="row" style="margin-top:8px">
       <div><label>T мин, °C</label><input id="pr_tmin" type="number" value="50" oninput="renderProps()"></div>
@@ -238,6 +240,10 @@ const PHYS=(function(){
   // Дымовые газы на УТ (фиты по замерам, СИ; T в K). M≈28.4 кг/кмоль.
   const gasP=T=>({rho:345.96/Math.max(T,1),cp:0.939642+2.663073e-4*T,
     lam:(0.009945+5.942786e-5*T)/1000,eta:9.1448e-6+3.43e-8*T,mu:28.4});
+  // Метан CH4 (фиты по замерам, СИ; T в K). M≈16 кг/кмоль.
+  const methaneP=T=>({rho:194.924/Math.max(T,1),cp:1.20625+3.4225e-3*T,lam:1.3387e-5*Math.pow(T,1.3762),eta:4.2e-6+2.5e-8*T,mu:16.0});
+  // Воздух (справочные, 1 атм; Сазерленд для вязкости). M=28.97 кг/кмоль.
+  const airStdP=T=>({rho:352.9/Math.max(T,1),cp:0.9463+1.957e-4*T,lam:0.00770+6.2e-5*T,eta:1.458e-6*Math.pow(T,1.5)/(T+110.4),mu:28.97});
   // воздух окружающей среды (1 атм), T[K]
   const airP=T=>({rho:352.8/T,mu:1.716e-5*Math.pow(T/273.15,0.7),lam:0.0241*Math.pow(T/273.15,0.9),cp:1005,beta:1/T});
   // внешний α (Вт/м²·К) от наружной поверхности изоляции к среде: естеств. конвекция + излучение.
@@ -375,7 +381,7 @@ const PHYS=(function(){
     return {sensors:S,extra:{'Re_масло':Re,'Pr':Pr,'Nu':Nu,'v,м/с':v}};}
 
   const RUN={CHE,FHE,EOH,HRU};
-  return {run:(app,p,bc)=>RUN[app]?RUN[app](p,bc):null, oilP, gasP};
+  return {run:(app,p,bc)=>RUN[app]?RUN[app](p,bc):null, oilP, gasP, methaneP, airP:airStdP};
 })();
 /* ===================== СВОЙСТВА ===================== */
 // THERMINOL 59 (фиты по паспорту L3-87Y02, реж.710) — согласованы с PHYS.oilP
@@ -704,12 +710,20 @@ function loopCp(P,Tc){return P.useCp?oilCp(Tc+273.15):2.0;}
 // Дымовые газы: m_flue = m_air + m_CH4; адиабатическая температура пламени из баланса
 // Q = m_CH4·LHV = m_flue·cp_flue·(Tflame − Tсмеси). cp газов — фит gasCp(T).
 const LHV_CH4=50000, L0_CH4=17.2;
+// свойства метана и воздуха (из PHYS) — для смесителя и отображения
+const methaneCp=T=>PHYS.methaneP(T).cp, airCp=T=>PHYS.airP(T).cp;
+// Смеситель (воздух+CH₄ при Tair) → печь идеального сгорания CH₄+2O₂→CO₂+2H₂O → дымовой газ.
 function furnace(st){
-  const mAir=Math.max(st.alpha,0)*L0_CH4*Math.max(st.mCH4,0), mFlue=mAir+Math.max(st.mCH4,0);
-  const Q=Math.max(st.mCH4,0)*LHV_CH4, TmixK=st.Tair+273.15;
+  const mCH4=Math.max(st.mCH4,0), a=Math.max(st.alpha,1e-6);
+  const mAir=a*L0_CH4*mCH4, mMix=mAir+mCH4, mFlue=mMix;      // масса сохраняется
+  const Q=mCH4*LHV_CH4, TmixK=st.Tair+273.15;                // топливная смесь на входе печи
+  // состав дымового газа (масс. доли): CO2 2.75, H2O 2.25 на кг CH4; N2 из воздуха; O2 избыток
+  const mCO2=2.75*mCH4, mH2O=2.25*mCH4, mO2=Math.max(a-1,0)*4*mCH4, mN2=0.768*mAir;
   let TfK=TmixK+1500;
   for(let it=0;it<15;it++){const cp=gasCp((TmixK+TfK)/2); TfK=TmixK+Q/Math.max(mFlue*cp,TINY);}
-  return {mAir,mFlue,Tflame:TfK-273.15,Qcomb:Q};
+  const cpMix=(mCH4*methaneCp(TmixK)+mAir*airCp(TmixK))/Math.max(mMix,TINY);
+  return {mCH4,mAir,mMix,mFlue,Tmix:st.Tair,cpMix,Tflame:TfK-273.15,Qcomb:Q,
+    comp:{CO2:mCO2/mFlue,H2O:mH2O/mFlue,N2:mN2/mFlue,O2:mO2/mFlue}};
 }
 function hxHeat(h,Tin,cpOil,mOil){
   const ThiK=h.Thin+273.15, TciK=Tin+273.15, Cc=mOil*cpOil;
@@ -751,7 +765,7 @@ function loopMarch(P,Tres){
     }
     else if(def.kind==='furn'){const fr=furnace(st), r=hxHeat({Thin:fr.Tflame,mGas:fr.mFlue,UA:st.UA},T,cp,P.mOil);
       steps.push({...base,kind:'furn',Tout:r.Tout,Q:r.Q,gas_in:fr.Tflame,gas_out:r.Tgas_out,
-        mCH4:st.mCH4,alpha:st.alpha,mAir:fr.mAir,mFlue:fr.mFlue,Tflame:fr.Tflame,Qcomb:fr.Qcomb}); T=r.Tout;}
+        mCH4:st.mCH4,alpha:st.alpha,mAir:fr.mAir,mMix:fr.mMix,Tmix:fr.Tmix,mFlue:fr.mFlue,Tflame:fr.Tflame,Qcomb:fr.Qcomb,comp:fr.comp}); T=r.Tout;}
     else if(def.kind==='load'){const r=hxLoad(st,T,cp,P.mOil);
       steps.push({...base,kind:'load',Tout:r.Tout,Q:r.Q,proc_in:st.Tp,proc_out:r.Tproc_out}); T=r.Tout;}
   });
@@ -789,42 +803,56 @@ function svgLn(x1,y1,x2,y2,c,m){return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'
 function svgTx(x,y,c,t,a,s,w){return '<text x="'+x+'" y="'+y+'" fill="'+c+'" font-size="'+(s||11)+'" text-anchor="'+(a||'middle')+'"'+(w?' font-weight="'+w+'"':'')+'>'+t+'</text>';}
 function svgBx(x,y,w,h){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="10" fill="#0c1117" stroke="#2a313c"/>';}
 function loopSchematic(P,S){
-  const T=v=>v.toFixed(1), Q=v=>v.toFixed(0);
-  const rw=148, ph=64, gap=26, y=86, bh=78, cy=y+bh/2;
+  const T=v=>v.toFixed(1), Q=v=>v.toFixed(0), F2=v=>v.toFixed(2);
+  const rw=148, ph=64, gap=26, y=86, bh=78, cy=y+bh/2, bot=y+bh; // 164
   const nodes=[]; let x=18;
   nodes.push({kind:'res',l:x,r:x+rw,cx:x+rw/2}); x+=rw+gap;
   nodes.push({kind:'pump',l:x,r:x+ph,cx:x+ph/2}); x+=ph+gap;
   S.steps.forEach(s=>{nodes.push({kind:'step',l:x,r:x+rw,cx:x+rw/2,s}); x+=rw+gap;});
   const W=x-gap+18, first=nodes[0], last=nodes[nodes.length-1];
-  let svg='<svg viewBox="0 0 '+W+' 250" width="100%"><defs>'
-    +svgMk('ar','#4ea1ff')+svgMk('arg','#e0a83b')+svgMk('are','#a978ff')+svgMk('arl','#3bd0d0')+svgMk('arf','#ff8c42')+'</defs>';
-  // нижний прямой трубопровод по всем узлам
+  const hasFurn=S.steps.some(s=>s.kind==='furn'), H=hasFurn?330:250;
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%"><defs>'
+    +svgMk('ar','#4ea1ff')+svgMk('arg','#e0a83b')+svgMk('are','#a978ff')+svgMk('arl','#3bd0d0')+svgMk('arf','#ff8c42')+svgMk('arm','#2ec27e')+svgMk('ara','#3bd0d0')+'</defs>';
   for(let i=0;i<nodes.length-1;i++) svg+=svgLn(nodes[i].r+2,cy,nodes[i+1].l-2,cy,'#4ea1ff','ar');
-  // верхний возврат масла в резервуар
   svg+='<polyline points="'+last.cx+','+y+' '+last.cx+',46 '+first.cx+',46 '+first.cx+','+y+'" fill="none" stroke="#4ea1ff" stroke-width="3" marker-end="url(#ar)"/>';
   svg+=svgTx((last.cx+first.cx)/2,40,'#4ea1ff','масло в контуре '+T(S.Tret)+' °C → в резервуар');
   nodes.forEach(n=>{
-    if(n.kind==='res'){svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+24,'#e6edf3','Резервуар',null,13,700)
-      +svgTx(n.cx,y+45,'#9aa7b4',T(S.Tres)+' °C')+svgTx(n.cx,y+63,'#9aa7b4','потери '+Q(S.Qamb)+' кВт ↓',null,10);}
+    if(n.kind==='res'){svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+22,'#e6edf3','Резервуар',null,13,700)
+      +svgTx(n.cx,y+42,'#9aa7b4',T(S.Tres)+' °C')+svgTx(n.cx,y+60,'#9aa7b4','потери '+Q(S.Qamb)+' кВт',null,10);
+      // блок входа масла (подпитка) снизу
+      svg+=svgBx(n.cx-42,bot+22,84,26)+svgTx(n.cx,bot+39,'#4ea1ff','Вход масла',null,11,700)
+        +svgLn(n.cx,bot+22,n.cx,bot+2,'#4ea1ff','ar')+svgTx(n.cx,bot+15,'#9aa7b4','подпитка',null,9);}
     else if(n.kind==='pump'){svg+='<circle cx="'+n.cx+'" cy="'+cy+'" r="'+(ph/2)+'" fill="#0c1117" stroke="#2a313c"/>'
       +svgTx(n.cx,cy-4,'#e6edf3','Насос',null,12,700)+svgTx(n.cx,cy+13,'#9aa7b4',Q(S.pumpPow)+' кВт',null,10);}
     else{const s=n.s, col=s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':(s.kind==='furn'?'#ff8c42':'#2ec27e'));
       svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+22,'#e6edf3',s.label,null,12,700)
         +svgTx(n.cx,y+42,col,(s.kind==='load'?'−':'+')+Q(s.Q)+' кВт',null,12)
         +svgTx(n.cx,y+60,'#9aa7b4',T(s.Tin)+'→'+T(s.Tout)+' °C',null,11);
-      if(s.kind==='gas'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#e0a83b','arg')
-        +svgTx(n.cx,y+bh+22,'#e0a83b','газ '+T(s.gas_in)+'→'+T(s.gas_out)+'°C')
-        +svgTx(n.cx,y+bh+36,'#e0a83b','→ в атмосферу',null,10);}
-      else if(s.kind==='furn'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#ff8c42','arf')
-        +svgTx(n.cx,y+bh+20,'#ff8c42','смеситель: воздух '+s.mAir.toFixed(2)+' + CH₄ '+s.mCH4+' кг/с',null,10)
-        +svgTx(n.cx,y+bh+34,'#ff8c42','печь: пламя '+T(s.Tflame)+'°C (α='+s.alpha+')',null,10)
-        +svgTx(n.cx,y+bh+48,'#ff8c42','дым.газ '+s.mFlue.toFixed(2)+' кг/с → '+T(s.gas_out)+'°C',null,10)
-        +svgTx(n.cx,y+bh+62,'#ff8c42','→ в атмосферу',null,10);}
-      else if(s.kind==='elec'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#a978ff','are')
-        +svgTx(n.cx,y+bh+22,'#a978ff','электро '+Q(s.Q)+' кВт');}
-      else if(s.kind==='load'){svg+=svgLn(n.cx,y+bh+2,n.cx,248,'#3bd0d0','arl')
-        +svgTx(n.cx,y+bh+22,'#3bd0d0','процесс '+T(s.proc_in)+'→'+T(s.proc_out)+'°C')
-        +svgTx(n.cx,y+bh+36,'#3bd0d0','отбор '+Q(s.Q)+' кВт',null,10);}}
+      if(s.kind==='gas'){svg+=svgLn(n.cx,248,n.cx,bot+2,'#e0a83b','arg')
+        +svgTx(n.cx,bot+22,'#e0a83b','газ '+T(s.gas_in)+'→'+T(s.gas_out)+'°C')
+        +svgTx(n.cx,bot+36,'#e0a83b','→ в атмосферу',null,10);}
+      else if(s.kind==='furn'){
+        // дымовой газ на выброс (сверху-справа от печи)
+        svg+=svgLn(n.r-16,y,n.r-16,58,'#e0a83b','arg')
+          +svgTx(n.r-16,52,'#e0a83b','дым.газ '+F2(s.mFlue)+' кг/с',null,9)
+          +svgTx(n.r-16,64,'#e0a83b','→ выброс '+T(s.gas_out)+'°C',null,9);
+        // топливная смесь: смеситель → печь (стрелка вверх в блок печи)
+        svg+=svgLn(n.cx,bot+52,n.cx,bot+2,'#ff8c42','arf')
+          +svgTx(n.cx,bot+16,'#ff8c42','топл.смесь '+F2(s.mMix)+' кг/с',null,10)
+          +svgTx(n.cx,bot+28,'#ff8c42','пламя '+T(s.Tflame)+'°C (α='+s.alpha+')',null,9)
+          +svgTx(n.cx,bot+42,'#9aa7b4','→ печь · сгорание CH₄',null,9);
+        // смеситель
+        svg+=svgBx(n.cx-34,bot+54,68,24)+svgTx(n.cx,bot+70,'#e6edf3','Смеситель',null,11,700);
+        // входы CH4 и воздуха
+        svg+=svgBx(n.cx-52,bot+96,48,28)+svgTx(n.cx-28,bot+109,'#2ec27e','CH₄',null,11,700)+svgTx(n.cx-28,bot+120,'#9aa7b4',F2(s.mCH4)+' кг/с',null,9)
+          +svgLn(n.cx-28,bot+96,n.cx-18,bot+80,'#2ec27e','arm');
+        svg+=svgBx(n.cx+4,bot+96,48,28)+svgTx(n.cx+28,bot+109,'#3bd0d0','Воздух',null,11,700)+svgTx(n.cx+28,bot+120,'#9aa7b4',F2(s.mAir)+' кг/с',null,9)
+          +svgLn(n.cx+28,bot+96,n.cx+18,bot+80,'#3bd0d0','ara');}
+      else if(s.kind==='elec'){svg+=svgLn(n.cx,248,n.cx,bot+2,'#a978ff','are')
+        +svgTx(n.cx,bot+22,'#a978ff','электро '+Q(s.Q)+' кВт');}
+      else if(s.kind==='load'){svg+=svgLn(n.cx,bot+2,n.cx,248,'#3bd0d0','arl')
+        +svgTx(n.cx,bot+22,'#3bd0d0','процесс '+T(s.proc_in)+'→'+T(s.proc_out)+'°C')
+        +svgTx(n.cx,bot+36,'#3bd0d0','отбор '+Q(s.Q)+' кВт',null,10);}}
   });
   return svg+'</svg>';
 }
@@ -987,23 +1015,25 @@ function renderSensors(){const app=el('a_dev').value, res=A_RES&&A_RES.sensors;
 
 /* ===================== СВОЙСТВА ПОТОКОВ (T-зависимости) ===================== */
 function onPropStream(){const st=el('pr_stream').value;
-  if(st==='gas'){el('pr_tmin').value=300;el('pr_tmax').value=560;}else{el('pr_tmin').value=50;el('pr_tmax').value=350;}
-  renderProps();}
+  const rng={oil:[50,350],gas:[300,560],methane:[50,730],air:[50,730]}[st]||[50,350];
+  el('pr_tmin').value=rng[0];el('pr_tmax').value=rng[1];renderProps();}
 function renderProps(){const st=el('pr_stream').value;
   let tmin=parseFloat(el('pr_tmin').value),tmax=parseFloat(el('pr_tmax').value);
   if(!(tmax>tmin)){tmax=tmin+300;}
   const N=80, xs=[], Ts=[]; for(let i=0;i<=N;i++){const Tc=tmin+(tmax-tmin)*i/N; xs.push(Tc); Ts.push(Tc+273.15);}
-  const fn=st==='oil'?PHYS.oilP:PHYS.gasP, name=st==='oil'?'THERMINOL 59':'Дымовые газы на УТ';
+  const FN={oil:PHYS.oilP,gas:PHYS.gasP,methane:PHYS.methaneP,air:PHYS.airP};
+  const NAME={oil:'THERMINOL 59',gas:'Дымовые газы на УТ',methane:'Метан (CH₄)',air:'Воздух'};
+  const fn=FN[st], name=NAME[st];
   const rho=Ts.map(T=>fn(T).rho), cp=Ts.map(T=>fn(T).cp), lam=Ts.map(T=>fn(T).lam*1000), eta=Ts.map(T=>fn(T).eta*1000);
   const mu=fn(400).mu, K=t=>t-273.15;
-  // опорные точки: масло — паспорт L3-87Y02; газ — замеры (СИ). У каждого свойства свои T.
-  const DS=st==='oil'
-    ? {rho:{T:[185.06,262],y:[853.32,789.52]},cp:{T:[185.06,262],y:[2.23,2.48]},lam:{T:[185.06,262],y:[0.1065,0.0969]},eta:{T:[185.06,262],y:[0.753,0.509]},lab:'паспорт L3-87Y02'}
-    : {rho:{T:[608,648,724,765,673].map(K),y:[0.57,0.535,0.4787,0.4533,0.51]},
-       cp:{T:[610,736,776,756].map(K),y:[1.102,1.136,1.146,1.141]},
-       lam:{T:[609,670,772,677].map(K),y:[0.0461,0.0498,0.0558,0.0502]},
-       eta:{T:[610,651,678,761].map(K),y:[0.030,0.0315,0.03249,0.0352]},lab:'замеры (СИ)'};
-  const plot=(div,y,title,unit,d)=>{const tr=[{x:xs,y,mode:'lines',line:{color:'#4ea1ff',width:2.4},name:name}];
+  // опорные точки: масло — паспорт; газ и метан — замеры (СИ); воздух — без точек (справочные)
+  const DSALL={
+    oil:{rho:{T:[185.06,262],y:[853.32,789.52]},cp:{T:[185.06,262],y:[2.23,2.48]},lam:{T:[185.06,262],y:[0.1065,0.0969]},eta:{T:[185.06,262],y:[0.753,0.509]},lab:'паспорт L3-87Y02'},
+    gas:{rho:{T:[608,648,724,765,673].map(K),y:[0.57,0.535,0.4787,0.4533,0.51]},cp:{T:[610,736,776,756].map(K),y:[1.102,1.136,1.146,1.141]},lam:{T:[609,670,772,677].map(K),y:[0.0461,0.0498,0.0558,0.0502]},eta:{T:[610,651,678,761].map(K),y:[0.030,0.0315,0.03249,0.0352]},lab:'замеры (СИ)'},
+    methane:{rho:{T:[323,400,600,800,1000].map(K),y:[0.60,0.4877,0.3244,0.2445,0.1955]},cp:{T:[300,500,700,900].map(K),y:[2.233,2.902,3.633,4.271]},lam:{T:[300,500,700,995].map(K),y:[0.0345,0.0682,0.112,0.178]},eta:{T:[400,500,700].map(K),y:[0.0142,0.0167,0.0217]},lab:'замеры (СИ)'},
+    air:{lab:''}};
+  const DS=DSALL[st];
+  const plot=(div,yv,title,unit,d)=>{const tr=[{x:xs,y:yv,mode:'lines',line:{color:'#4ea1ff',width:2.4},name:name}];
     if(d)tr.push({x:d.T,y:d.y,mode:'markers',marker:{size:11,color:'#2ec27e',symbol:'diamond'},name:DS.lab});
     Plotly.newPlot(div,tr,layout(title,'T, °C',unit),cfg());};
   plot('pr_rho',rho,'Плотность ρ(T)','кг/м³',DS.rho);
@@ -1013,9 +1043,12 @@ function renderProps(){const st=el('pr_stream').value;
   el('pr_kpis').innerHTML='<div class="kpi"><b>'+name+'</b><span>поток</span></div>'
     +'<div class="kpi"><b>'+mu.toFixed(1)+'</b><span>молярная масса M, кг/кмоль</span></div>'
     +'<div class="kpi"><b>'+fn(Ts[Math.floor(N/2)]).rho.toFixed(3)+'</b><span>ρ при '+xs[Math.floor(N/2)].toFixed(0)+'°C, кг/м³</span></div>';
-  el('pr_note').innerHTML=st==='oil'
-    ? 'Масло <b>THERMINOL 59</b>. Фиты плотности/теплоёмкости/теплопроводности — линейные, вязкости — μ=A·exp(B/T), калиброваны по паспорту L3-87Y02 (реж.710): точки 185.06 °C и 262 °C (зелёные ромбы) — кривые проходят через паспортные значения. M=207 кг/кмоль.'
-    : '<b>Дымовые газы на УТ</b>. Фиты по замерам (СИ): ρ=346/T (иде­альный газ, M≈28.4), cp/λ/μ — линейные по T. Зелёные ромбы — замеренные точки, кривые проходят по ним. Используются на газовой стороне утилизатора.';}
+  const notes={
+    oil:'Масло <b>THERMINOL 59</b>. Фиты ρ/cp/λ — линейные, вязкости μ=A·exp(B/T), по паспорту L3-87Y02 (реж.710); точки 185.06/262 °C (ромбы) лежат на кривых. M=207.',
+    gas:'<b>Дымовые газы на УТ</b>. Фиты по замерам (СИ): ρ=346/T (M≈28.4), cp/λ/μ линейные. Зелёные ромбы — замеры, кривые проходят по ним. Газовая сторона утилизатора.',
+    methane:'<b>Метан CH₄</b>. Фиты по замерам (СИ): ρ=195/T (M≈16), cp линейный, λ=a·T^1.38 (степенной), μ линейный. Ромбы — замеры. Топливо смесителя/печи.',
+    air:'<b>Воздух</b> (справочные данные, 1 атм): ρ=352.9/T (M=28.97), cp≈0.946+1.96·10⁻⁴·T, λ линейная, μ — формула Сазерленда. Окислитель в смесителе.'};
+  el('pr_note').innerHTML=notes[st];}
 
 /* ===================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ===================== */
 function setMode(m){

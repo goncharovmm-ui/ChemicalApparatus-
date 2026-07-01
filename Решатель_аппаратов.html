@@ -168,6 +168,7 @@
       <div id="lunits"></div>
       <div class="row">
         <div><select id="laddtype">
+          <option value="FURN">Печь-утилизатор (смеситель+CH₄→дым.газ→масло)</option>
           <option value="HRU">HRU — утилизатор (газ→масло)</option>
           <option value="FHE">FHE — печной (газ→масло)</option>
           <option value="CHE">CHE — рекуператор (газ→масло)</option>
@@ -484,14 +485,15 @@ function runChain(){
 /* --- настраиваемый список станций контура (add/del/reorder), как в открытой цепочке --- */
 let LSTAT=[];
 const LSTAT_DEF={
+  FURN:{slabel:'Печь-утилизатор', kind:'furn', f:['mCH4','alpha','Tair','UA'], d:{mCH4:0.05,alpha:1.1,Tair:20,UA:8}},
   HRU: {slabel:'Утилизатор HRU', kind:'gas', f:['Thin','mGas','UA'], d:{Thin:585,mGas:20,UA:8}},
   FHE: {slabel:'Печной FHE',     kind:'gas', f:['Thin','mGas','UA'], d:{Thin:700,mGas:20,UA:7}},
   CHE: {slabel:'Рекуператор CHE', kind:'gas', f:['Thin','mGas','UA'], d:{Thin:639,mGas:18,UA:7}},
   EOH: {slabel:'Огневой EOH',    kind:'elec',f:['Power'],            d:{Power:180}},
   LOAD:{slabel:'Потребитель',    kind:'load',f:['Tp','C','UA'],      d:{Tp:150,C:26,UA:28}}
 };
-const LFLD={Thin:'T газа,°C',mGas:'расход газа',UA:'UA,кВт/К',Power:'Мощность,кВт',Tp:'T процесса,°C',C:'C проц.,кВт/К'};
-const LTYPES={HRU:'HRU (газ→масло)',FHE:'FHE (газ→масло)',CHE:'CHE (газ→масло)',EOH:'EOH (электро)',LOAD:'Потребитель (масло→процесс)'};
+const LFLD={Thin:'T газа,°C',mGas:'расход газа',UA:'UA,кВт/К',Power:'Мощность,кВт',Tp:'T процесса,°C',C:'C проц.,кВт/К',
+  mCH4:'CH₄, кг/с',alpha:'α возд.',Tair:'T смеси,°C'};
 function defLStat(t){return {type:t,...JSON.parse(JSON.stringify(LSTAT_DEF[t].d))};}
 function addLStat(){LSTAT.push(defLStat(el('laddtype').value));renderLStat();runLoop();}
 function delLStat(i){LSTAT.splice(i,1);renderLStat();runLoop();}
@@ -518,6 +520,18 @@ function loopCp(P,Tc){return P.useCp?oilCp(Tc+273.15):2.0;}
 // резервуара), cp газа — при его собственной средней температуре. Это гарантирует точное замыкание
 // энергобаланса «тепло газа = тепло маслу» (в отличие от общего hxNTU, где cp масла берётся при
 // средней газ-масло температуре и даёт ~3% расхождение). Масло — холодная сторона.
+// смеситель (воздух+CH₄) + печь идеального (полного) сгорания метана:
+// CH₄ + 2O₂ → CO₂ + 2H₂O. Стехиометрия L0≈17.2 кг возд/кг CH₄, LHV≈50 МДж/кг.
+// Дымовые газы: m_flue = m_air + m_CH4; адиабатическая температура пламени из баланса
+// Q = m_CH4·LHV = m_flue·cp_flue·(Tflame − Tсмеси). cp газов — фит gasCp(T).
+const LHV_CH4=50000, L0_CH4=17.2;
+function furnace(st){
+  const mAir=Math.max(st.alpha,0)*L0_CH4*Math.max(st.mCH4,0), mFlue=mAir+Math.max(st.mCH4,0);
+  const Q=Math.max(st.mCH4,0)*LHV_CH4, TmixK=st.Tair+273.15;
+  let TfK=TmixK+1500;
+  for(let it=0;it<15;it++){const cp=gasCp((TmixK+TfK)/2); TfK=TmixK+Q/Math.max(mFlue*cp,TINY);}
+  return {mAir,mFlue,Tflame:TfK-273.15,Qcomb:Q};
+}
 function hxHeat(h,Tin,cpOil,mOil){
   const ThiK=h.Thin+273.15, TciK=Tin+273.15, Cc=mOil*cpOil;
   let Tg=h.Thin-30, q=0, Tout=Tin+40;
@@ -549,6 +563,9 @@ function loopMarch(P,Tres){
     const def=LSTAT_DEF[st.type], base={key:st.type,label:def.slabel,Tin:T};
     if(def.kind==='gas'){const r=hxHeat(st,T,cp,P.mOil);
       steps.push({...base,kind:'gas',Tout:r.Tout,Q:r.Q,gas_in:st.Thin,gas_out:r.Tgas_out}); T=r.Tout;}
+    else if(def.kind==='furn'){const fr=furnace(st), r=hxHeat({Thin:fr.Tflame,mGas:fr.mFlue,UA:st.UA},T,cp,P.mOil);
+      steps.push({...base,kind:'furn',Tout:r.Tout,Q:r.Q,gas_in:fr.Tflame,gas_out:r.Tgas_out,
+        mCH4:st.mCH4,alpha:st.alpha,mAir:fr.mAir,mFlue:fr.mFlue,Tflame:fr.Tflame,Qcomb:fr.Qcomb}); T=r.Tout;}
     else if(def.kind==='elec'){const q=st.Power, Tout=T+q/Math.max(P.mOil*cp,TINY);
       steps.push({...base,kind:'elec',Tout,Q:q}); T=Tout;}
     else if(def.kind==='load'){const r=hxLoad(st,T,cp,P.mOil);
@@ -570,9 +587,11 @@ function loopSteady(P){
   const Qheat=m.steps.filter(s=>s.kind!=='load').reduce((a,s)=>a+s.Q,0);
   const Qload=m.steps.filter(s=>s.kind==='load').reduce((a,s)=>a+s.Q,0);
   const Tpeak=m.steps.reduce((a,s)=>Math.max(a,s.Tout),m.T1);
-  const hru=m.steps.find(s=>s.kind==='gas');
-  return {Tres,...m,Qamb:P.UAamb*(Tres-P.Tamb),Qheat,Qload,Tpeak,
-    pumpDiss:m.pumpPow*(1-P.etaPump),gasOutHRU:hru?hru.gas_out:null,iters,hist};
+  const firstGas=m.steps.find(s=>s.gas_out!=null);
+  const Qfuel=m.steps.filter(s=>s.kind==='furn').reduce((a,s)=>a+s.Qcomb,0);
+  const Qfurn=m.steps.filter(s=>s.kind==='furn').reduce((a,s)=>a+s.Q,0);
+  return {Tres,...m,Qamb:P.UAamb*(Tres-P.Tamb),Qheat,Qload,Qfuel,Qfurn,Tpeak,
+    pumpDiss:m.pumpPow*(1-P.etaPump),gasOutHRU:firstGas?firstGas.gas_out:null,iters,hist};
 }
 // динамика: резервуар как тепловая масса, станции квазистационарны
 function loopDeriv(Tres,P){const m=loopMarch(P,Tres);
@@ -594,7 +613,7 @@ function loopSchematic(P,S){
   S.steps.forEach(s=>{nodes.push({kind:'step',l:x,r:x+rw,cx:x+rw/2,s}); x+=rw+gap;});
   const W=x-gap+18, first=nodes[0], last=nodes[nodes.length-1];
   let svg='<svg viewBox="0 0 '+W+' 250" width="100%"><defs>'
-    +svgMk('ar','#4ea1ff')+svgMk('arg','#e0a83b')+svgMk('are','#a978ff')+svgMk('arl','#3bd0d0')+'</defs>';
+    +svgMk('ar','#4ea1ff')+svgMk('arg','#e0a83b')+svgMk('are','#a978ff')+svgMk('arl','#3bd0d0')+svgMk('arf','#ff8c42')+'</defs>';
   // нижний прямой трубопровод по всем узлам
   for(let i=0;i<nodes.length-1;i++) svg+=svgLn(nodes[i].r+2,cy,nodes[i+1].l-2,cy,'#4ea1ff','ar');
   // верхний возврат масла в резервуар
@@ -605,13 +624,18 @@ function loopSchematic(P,S){
       +svgTx(n.cx,y+45,'#9aa7b4',T(S.Tres)+' °C')+svgTx(n.cx,y+63,'#9aa7b4','потери '+Q(S.Qamb)+' кВт ↓',null,10);}
     else if(n.kind==='pump'){svg+='<circle cx="'+n.cx+'" cy="'+cy+'" r="'+(ph/2)+'" fill="#0c1117" stroke="#2a313c"/>'
       +svgTx(n.cx,cy-4,'#e6edf3','Насос',null,12,700)+svgTx(n.cx,cy+13,'#9aa7b4',Q(S.pumpPow)+' кВт',null,10);}
-    else{const s=n.s, col=s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':'#2ec27e');
+    else{const s=n.s, col=s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':(s.kind==='furn'?'#ff8c42':'#2ec27e'));
       svg+=svgBx(n.l,y,rw,bh)+svgTx(n.cx,y+22,'#e6edf3',s.label,null,12,700)
         +svgTx(n.cx,y+42,col,(s.kind==='load'?'−':'+')+Q(s.Q)+' кВт',null,12)
         +svgTx(n.cx,y+60,'#9aa7b4',T(s.Tin)+'→'+T(s.Tout)+' °C',null,11);
       if(s.kind==='gas'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#e0a83b','arg')
         +svgTx(n.cx,y+bh+22,'#e0a83b','газ '+T(s.gas_in)+'→'+T(s.gas_out)+'°C')
         +svgTx(n.cx,y+bh+36,'#e0a83b','→ в атмосферу',null,10);}
+      else if(s.kind==='furn'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#ff8c42','arf')
+        +svgTx(n.cx,y+bh+20,'#ff8c42','смеситель: воздух '+s.mAir.toFixed(2)+' + CH₄ '+s.mCH4+' кг/с',null,10)
+        +svgTx(n.cx,y+bh+34,'#ff8c42','печь: пламя '+T(s.Tflame)+'°C (α='+s.alpha+')',null,10)
+        +svgTx(n.cx,y+bh+48,'#ff8c42','дым.газ '+s.mFlue.toFixed(2)+' кг/с → '+T(s.gas_out)+'°C',null,10)
+        +svgTx(n.cx,y+bh+62,'#ff8c42','→ в атмосферу',null,10);}
       else if(s.kind==='elec'){svg+=svgLn(n.cx,248,n.cx,y+bh+2,'#a978ff','are')
         +svgTx(n.cx,y+bh+22,'#a978ff','электро '+Q(s.Q)+' кВт');}
       else if(s.kind==='load'){svg+=svgLn(n.cx,y+bh+2,n.cx,248,'#3bd0d0','arl')
@@ -634,6 +658,7 @@ function runLoop(){
       +'<div class="kpi"><b>'+S.Tpeak.toFixed(1)+' °C</b><span>пик T масла (после нагрева)</span></div>'
       +'<div class="kpi"><b>'+S.Qheat.toFixed(0)+' кВт</b><span>суммарный подвод тепла</span></div>';
     if(P.load) kpi+='<div class="kpi"><b>'+S.Qload.toFixed(0)+' кВт</b><span>отбор потребителя</span></div>';
+    if(S.Qfuel>0) kpi+='<div class="kpi"><b>'+S.Qfuel.toFixed(0)+' кВт</b><span>топливо CH₄ (η='+(100*S.Qfurn/S.Qfuel).toFixed(0)+'% → маслу)</span></div>';
     if(S.gasOutHRU!=null) kpi+='<div class="kpi"><b>'+S.gasOutHRU.toFixed(1)+' °C</b><span>газ в атмосферу (1-й нагреватель)</span></div>';
     kpi+='<div class="kpi"><b>'+S.Qamb.toFixed(0)+' кВт</b><span>потери в среду</span></div>'
       +'<div class="kpi"><b>'+S.iters+'</b><span>итераций рецикла</span></div>';
@@ -641,7 +666,7 @@ function runLoop(){
     // график: профиль T масла по контуру (Резервуар → Насос → станции → возврат), с цветными точками по типу
     const pxs=['Резервуар','Насос'], pys=[S.Tres,S.T1], mcol=['#9aa7b4','#9aa7b4'];
     S.steps.forEach((s,i)=>{pxs.push((i+1)+'.'+s.key); pys.push(s.Tout);
-      mcol.push(s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':'#2ec27e'));});
+      mcol.push(s.kind==='load'?'#3bd0d0':(s.kind==='elec'?'#a978ff':(s.kind==='furn'?'#ff8c42':'#2ec27e')));});
     pxs.push('→ Резервуар'); pys.push(S.Tret); mcol.push('#9aa7b4');
     const layP=layout('Профиль температуры масла по контуру','узел контура','T масла, °C');
     layP.shapes=[{type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}},
@@ -665,7 +690,8 @@ function runLoop(){
       +'<tr><td>Резервуар (выход)</td><td>'+S.Tres.toFixed(1)+'</td><td>tear-поток контура</td></tr>'
       +'<tr><td>После насоса</td><td>'+S.T1.toFixed(1)+'</td><td>+'+S.dTpump.toFixed(2)+' °C ('+S.pumpPow.toFixed(0)+' кВт)</td></tr>';
     S.steps.forEach(s=>{const info=s.kind==='gas'?('газ '+s.gas_in.toFixed(0)+'→'+s.gas_out.toFixed(1)+' °C → в атмосферу'):
-        (s.kind==='elec'?'электроподогрев':('процесс '+s.proc_in.toFixed(0)+'→'+s.proc_out.toFixed(1)+' °C'));
+        (s.kind==='furn'?('пламя '+s.Tflame.toFixed(0)+'°C, дым.газ '+s.mFlue.toFixed(2)+' кг/с → '+s.gas_out.toFixed(1)+'°C → в атмосферу'):
+        (s.kind==='elec'?'электроподогрев':('процесс '+s.proc_in.toFixed(0)+'→'+s.proc_out.toFixed(1)+' °C')));
       const dT=(s.Tout-s.Tin), sign=dT>=0?'+':'';
       html+='<tr><td>'+s.label+'</td><td>'+s.Tout.toFixed(1)+'</td><td>'+sign+dT.toFixed(1)+' °C, '+(s.kind==='load'?'отбор':'Q')+'='+s.Q.toFixed(0)+' кВт · '+info+'</td></tr>';});
     const resid=S.Qheat+S.pumpDiss-S.Qload-S.Qamb;
@@ -675,11 +701,21 @@ function runLoop(){
       +'<tr><td>расход: отбор потребителя</td><td>'+S.Qload.toFixed(0)+'</td></tr>'
       +'<tr><td>расход: потери в среду</td><td>'+S.Qamb.toFixed(0)+'</td></tr>'
       +'<tr><td>невязка</td><td>'+resid.toFixed(2)+'</td></tr></table>';
+    // сводка по сгоранию (смеситель + печь идеального сгорания CH₄)
+    const furns=S.steps.filter(s=>s.kind==='furn');
+    if(furns.length){
+      html+='<table style="margin-top:8px"><tr><th>печь (сгорание CH₄)</th><th>CH₄,кг/с</th><th>воздух,кг/с</th><th>α</th>'
+        +'<th>дым.газ,кг/с</th><th>пламя,°C</th><th>выброс,°C</th><th>Q топл,кВт</th><th>Q→маслу,кВт</th></tr>';
+      furns.forEach(s=>{html+='<tr><td>'+s.label+'</td><td>'+s.mCH4+'</td><td>'+s.mAir.toFixed(2)+'</td><td>'+s.alpha
+        +'</td><td>'+s.mFlue.toFixed(2)+'</td><td>'+s.Tflame.toFixed(0)+'</td><td>'+s.gas_out.toFixed(1)
+        +'</td><td>'+s.Qcomb.toFixed(0)+'</td><td>'+s.Q.toFixed(0)+'</td></tr>';});
+      html+='</table>';
+    }
     el('loopTable').innerHTML=html;
     el('cstatus').textContent='Готово · равновесие '+S.Tres.toFixed(1)+' °C за '+S.iters+' итераций рецикла';
   },20);
 }
-function initLStat(){if(!LSTAT.length)LSTAT=['HRU','FHE','EOH','LOAD'].map(defLStat);renderLStat();}
+function initLStat(){if(!LSTAT.length)LSTAT=['FURN','FHE','EOH','LOAD'].map(defLStat);renderLStat();}
 function setTopology(){const t=el('topology').value,loop=t==='loop';
   el('panel-open').classList.toggle('hide',loop); el('panel-loop').classList.toggle('hide',!loop);
   el('main-open').classList.toggle('hide',loop);  el('main-loop').classList.toggle('hide',!loop);

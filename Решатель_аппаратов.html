@@ -351,7 +351,9 @@ const PHYS=(function(){
     const gasMeanC=(bc.gas.T+(R.Tog-273.15))/2, TambC=(p0.TAirAtm||293.15)-273.15;
     const ext=alphaExt(gasMeanC,TambC,3,p0.dIsoCC,p0.lambdaAtmCC,0.9);
     const aAtm=p0.alphaAtmCC>0?p0.alphaAtmCC:ext.alpha;   // param>0 — ручное переопределение
-    const QAtm=(aAtm/1000)*(p0.sAtmSideCC||1)*(gasMeanC+273.15-(p0.TAirAtm||293.15))/(1+aAtm*p0.dIsoCC/p0.lambdaAtmCC);
+    // внешняя площадь корпуса: из геометрии (a·b·l), если параметр sAtmSideCC не задан (заглушка ≤2 м²)
+    const Sext=p0.sAtmSideCC>2?p0.sAtmSideCC:(2*(p0.aCC+p0.bCC)*p0.l_out_CC+2*p0.aCC*p0.bCC);
+    const QAtm=(aAtm/1000)*Sext*(gasMeanC+273.15-(p0.TAirAtm||293.15))/(1+aAtm*p0.dIsoCC/p0.lambdaAtmCC);
     const _d1=bc.gas.T-bc.oil.T,_d2=(R.Tog-273.15)-(R.Too-273.15),LMTDco=Math.abs(_d1-_d2)<1e-3?_d1:(_d1-_d2)/Math.log(Math.max(_d1/_d2,1e-6));
     // поток ДГ делится: доля pf идёт через УТ и охлаждается до T_after_HE (отдав тепло маслу),
     // остаток (1−pf) идёт по байпасу и сохраняет температуру входа. На выходе аппарата потоки
@@ -361,10 +363,12 @@ const PHYS=(function(){
     const Tmix=(pf*cpHX*T_after_HE+(1-pf)*cpBP*T_bypass)/Math.max(cpMix,1e-9);
     // тепло, уносимое выхлопом в атмосферу = энтальпия всего потока ДГ над температурой среды.
     const cpAtm=gasP((Tmix+TambC)/2+273.15).cp, GasQatm=mGasFull*cpAtm*(Tmix-TambC);
+    // разбивка энергии, отданной газом: маслу (R.Q) + через поверхность корпуса в среду (QAtm).
+    const dEgas=R.Q+QAtm, fSurf=100*QAtm/Math.max(dEgas,1e-9);   // доля потерь через поверхность, %
     const S={GAS_MF_FULL:mGasFull,GAS_MF_HRU:mGasHX,GAS_MF_BP:mGasFull-mGasHX,GAS_IN_TEMP:bc.gas.T,GAS_OUT_TEMP:Tmix,
       T_EG_after_HE:T_after_HE,GAS_MIX_OUT:Tmix,GAS_Q_ATM:GasQatm,OIL_IN_TEMP:bc.oil.T,OIL_OUT_TEMP:R.Too-273.15,OIL_MF:R.mdo,DELTA_P_OIL:R.dpO,
-      ID_SENSOR_alphaCC:R.aG,ID_SENSOR_sSideCC:R.sOil,ID_SENSOR_LMTDCC:LMTDco,Q:R.Q,QAtmCC:QAtm};
-    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_газ_байпас,кг/с':mGasFull-mGasHX,'T ДГ после УТ,°C':T_after_HE,'T ДГ байпас,°C':T_bypass,'T ДГ выход(смесь),°C':Tmix,'Q в атмосферу,кВт':GasQatm,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
+      ID_SENSOR_alphaCC:R.aG,ID_SENSOR_sSideCC:R.sOil,ID_SENSOR_LMTDCC:LMTDco,Q:R.Q,QAtmCC:QAtm,Q_SURF_FRAC:fSurf};
+    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_газ_байпас,кг/с':mGasFull-mGasHX,'T ДГ после УТ,°C':T_after_HE,'T ДГ байпас,°C':T_bypass,'T ДГ выход(смесь),°C':Tmix,'Q в атмосферу,кВт':GasQatm,'Q маслу,кВт':R.Q,'Q через поверхн.,кВт':QAtm,'S поверхн.,м²':Sext,'доля потерь через поверхн.,%':fSurf,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
 
   function FHE(p0,bc){p0=norm(p0);const nch=p0.burnerModel==1?8:4,DP=p0.dPipeRC+p0.deltaPipeRC;
     let sLS,pWet; if(p0.burnerModel==1){sLS=p0.aRC*p0.bRC-8*p0.nPipeRC*Math.PI*DP*DP/4;pWet=Math.PI*DP*8*p0.nPipeRC+2*(p0.aRC+p0.bRC);}
@@ -1112,7 +1116,9 @@ function summCols(app){
    {h:'LMTD',u:'°C',get:s=>s.ID_SENSOR_LMTDCC,ref:(r,c)=>r?r.lmtd:null,cnt:1,d:2},
    {h:'Запас',u:'%',get:s=>null,ref:(r,c)=>r?c.reserve:null,cnt:0,d:0,na:'проект'},
    {h:'Тепл. мощность',u:'кВт',get:s=>s.Q,ref:(r,c)=>r?c.Q:null,cnt:1,d:0},
-   {h:'Q в атмосферу',u:'кВт',get:s=>s.GAS_Q_ATM,ref:()=>null,cnt:0,d:0}];
+   {h:'Q в атмосферу',u:'кВт',get:s=>s.GAS_Q_ATM,ref:()=>null,cnt:0,d:0},
+   {h:'Потери ч/з поверхн.',u:'кВт',get:s=>s.QAtmCC,ref:()=>null,cnt:0,d:1},
+   {h:'доля потерь ч/з поверхн.',u:'%',get:s=>s.Q_SURF_FRAC,ref:()=>null,cnt:0,d:3}];
   // общий набор для CHE/FHE/EOH: ключевые выходные сенсоры, эталон — из граничных условий (bc.ref)
   return [
    {h:'Т газа Вх',u:'°C',get:s=>s.GAS_IN_TEMP,ref:()=>null,cnt:0,d:1},

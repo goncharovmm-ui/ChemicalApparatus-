@@ -329,11 +329,16 @@ const PHYS=(function(){
     const aAtm=p0.alphaAtmCC>0?p0.alphaAtmCC:ext.alpha;   // param>0 — ручное переопределение
     const QAtm=(aAtm/1000)*(p0.sAtmSideCC||1)*(gasMeanC+273.15-(p0.TAirAtm||293.15))/(1+aAtm*p0.dIsoCC/p0.lambdaAtmCC);
     const _d1=bc.gas.T-bc.oil.T,_d2=(R.Tog-273.15)-(R.Too-273.15),LMTDco=Math.abs(_d1-_d2)<1e-3?_d1:(_d1-_d2)/Math.log(Math.max(_d1/_d2,1e-6));
-    const Tmix=bc.gas.T-(bc.gas.T-(R.Tog-273.15))*pf;   // смешение УТ-потока и байпаса на выходе
-    const S={GAS_MF_FULL:mGasFull,GAS_MF_HRU:mGasHX,GAS_MF_BP:mGasFull-mGasHX,GAS_IN_TEMP:bc.gas.T,GAS_OUT_TEMP:R.Tog-273.15,
-      T_EG_after_HE:R.Tog-273.15,GAS_MIX_OUT:Tmix,OIL_IN_TEMP:bc.oil.T,OIL_OUT_TEMP:R.Too-273.15,OIL_MF:R.mdo,DELTA_P_OIL:R.dpO,
+    // поток ДГ делится: доля pf идёт через УТ и охлаждается до T_after_HE (отдав тепло маслу),
+    // остаток (1−pf) идёт по байпасу и сохраняет температуру входа. На выходе аппарата потоки
+    // смешиваются → T2 (GAS_OUT_TEMP) = средневзвешенная по расходам (энергобаланс m·cp·T).
+    const T_after_HE=R.Tog-273.15, T_bypass=bc.gas.T;
+    const cpHX=gasP(R.Tog).cp, cpBP=gasP(bc.gas.T+273.15).cp, cpMix=pf*cpHX+(1-pf)*cpBP;
+    const Tmix=(pf*cpHX*T_after_HE+(1-pf)*cpBP*T_bypass)/Math.max(cpMix,1e-9);
+    const S={GAS_MF_FULL:mGasFull,GAS_MF_HRU:mGasHX,GAS_MF_BP:mGasFull-mGasHX,GAS_IN_TEMP:bc.gas.T,GAS_OUT_TEMP:Tmix,
+      T_EG_after_HE:T_after_HE,GAS_MIX_OUT:Tmix,OIL_IN_TEMP:bc.oil.T,OIL_OUT_TEMP:R.Too-273.15,OIL_MF:R.mdo,DELTA_P_OIL:R.dpO,
       ID_SENSOR_alphaCC:R.aG,ID_SENSOR_sSideCC:R.sOil,ID_SENSOR_LMTDCC:LMTDco,Q:R.Q,QAtmCC:QAtm};
-    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
+    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_газ_байпас,кг/с':mGasFull-mGasHX,'T ДГ после УТ,°C':T_after_HE,'T ДГ байпас,°C':T_bypass,'T ДГ выход(смесь),°C':Tmix,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
 
   function FHE(p0,bc){p0=norm(p0);const nch=p0.burnerModel==1?8:4,DP=p0.dPipeRC+p0.deltaPipeRC;
     let sLS,pWet; if(p0.burnerModel==1){sLS=p0.aRC*p0.bRC-8*p0.nPipeRC*Math.PI*DP*DP/4;pWet=Math.PI*DP*8*p0.nPipeRC+2*(p0.aRC+p0.bRC);}

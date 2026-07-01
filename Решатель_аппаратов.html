@@ -359,10 +359,12 @@ const PHYS=(function(){
     const T_after_HE=R.Tog-273.15, T_bypass=bc.gas.T;
     const cpHX=gasP(R.Tog).cp, cpBP=gasP(bc.gas.T+273.15).cp, cpMix=pf*cpHX+(1-pf)*cpBP;
     const Tmix=(pf*cpHX*T_after_HE+(1-pf)*cpBP*T_bypass)/Math.max(cpMix,1e-9);
+    // тепло, уносимое выхлопом в атмосферу = энтальпия всего потока ДГ над температурой среды.
+    const cpAtm=gasP((Tmix+TambC)/2+273.15).cp, GasQatm=mGasFull*cpAtm*(Tmix-TambC);
     const S={GAS_MF_FULL:mGasFull,GAS_MF_HRU:mGasHX,GAS_MF_BP:mGasFull-mGasHX,GAS_IN_TEMP:bc.gas.T,GAS_OUT_TEMP:Tmix,
-      T_EG_after_HE:T_after_HE,GAS_MIX_OUT:Tmix,OIL_IN_TEMP:bc.oil.T,OIL_OUT_TEMP:R.Too-273.15,OIL_MF:R.mdo,DELTA_P_OIL:R.dpO,
+      T_EG_after_HE:T_after_HE,GAS_MIX_OUT:Tmix,GAS_Q_ATM:GasQatm,OIL_IN_TEMP:bc.oil.T,OIL_OUT_TEMP:R.Too-273.15,OIL_MF:R.mdo,DELTA_P_OIL:R.dpO,
       ID_SENSOR_alphaCC:R.aG,ID_SENSOR_sSideCC:R.sOil,ID_SENSOR_LMTDCC:LMTDco,Q:R.Q,QAtmCC:QAtm};
-    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_газ_байпас,кг/с':mGasFull-mGasHX,'T ДГ после УТ,°C':T_after_HE,'T ДГ байпас,°C':T_bypass,'T ДГ выход(смесь),°C':Tmix,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
+    return {sensors:S,R,extra:{'ε':R.eps,'NTU':R.NTU,'m_газ_ГТУ,кг/с':mGasFull,'m_газ_УТ,кг/с':mGasHX,'m_газ_байпас,кг/с':mGasFull-mGasHX,'T ДГ после УТ,°C':T_after_HE,'T ДГ байпас,°C':T_bypass,'T ДГ выход(смесь),°C':Tmix,'Q в атмосферу,кВт':GasQatm,'m_масло,кг/с':R.mdo,'UA,кВт/К':R.UA,'α_масло':R.aO,'part_flow':pf,'α_внеш,Вт/м²К':ext.alpha,'T нар.пов.,°C':ext.Ts,'Tсреды,°C':TambC}};}
 
   function FHE(p0,bc){p0=norm(p0);const nch=p0.burnerModel==1?8:4,DP=p0.dPipeRC+p0.deltaPipeRC;
     let sLS,pWet; if(p0.burnerModel==1){sLS=p0.aRC*p0.bRC-8*p0.nPipeRC*Math.PI*DP*DP/4;pWet=Math.PI*DP*8*p0.nPipeRC+2*(p0.aRC+p0.bRC);}
@@ -1109,7 +1111,8 @@ function summCols(app){
    {h:'ΔP2 УТО',u:'кгс/см²',get:s=>s.DELTA_P_OIL/98.0665,ref:(r,c)=>r?c.dp2:null,cnt:0,d:3,na:'не в зачёте'},
    {h:'LMTD',u:'°C',get:s=>s.ID_SENSOR_LMTDCC,ref:(r,c)=>r?r.lmtd:null,cnt:1,d:2},
    {h:'Запас',u:'%',get:s=>null,ref:(r,c)=>r?c.reserve:null,cnt:0,d:0,na:'проект'},
-   {h:'Тепл. мощность',u:'кВт',get:s=>s.Q,ref:(r,c)=>r?c.Q:null,cnt:1,d:0}];
+   {h:'Тепл. мощность',u:'кВт',get:s=>s.Q,ref:(r,c)=>r?c.Q:null,cnt:1,d:0},
+   {h:'Q в атмосферу',u:'кВт',get:s=>s.GAS_Q_ATM,ref:()=>null,cnt:0,d:0}];
   // общий набор для CHE/FHE/EOH: ключевые выходные сенсоры, эталон — из граничных условий (bc.ref)
   return [
    {h:'Т газа Вх',u:'°C',get:s=>s.GAS_IN_TEMP,ref:()=>null,cnt:0,d:1},

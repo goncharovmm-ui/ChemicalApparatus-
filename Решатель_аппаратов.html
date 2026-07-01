@@ -57,58 +57,12 @@
 </head>
 <body>
 <header>
-  <h1>Решатель аппаратов · 0d · устойчивые схемы + связка</h1>
+  <h1>Решатель аппаратов · 0d · модели аппаратов + связка</h1>
   <div class="tabs">
-    <div class="tab on" id="tab-single" onclick="setMode('single')">Один аппарат</div>
+    <div class="tab on" id="tab-apps" onclick="setMode('apps')">Аппараты · модель/тесты</div>
     <div class="tab" id="tab-chain" onclick="setMode('chain')">Связка (цепочка)</div>
-    <div class="tab" id="tab-apps" onclick="setMode('apps')">Аппараты · параметры/сенсоры/тесты</div>
   </div>
 </header>
-
-<!-- ============ РЕЖИМ: ОДИН АППАРАТ ============ -->
-<div class="wrap" id="view-single">
-  <aside class="side">
-    <label>Аппарат</label>
-    <select id="device"></select>
-    <div id="devnote" class="note"></div>
-    <div id="params"></div>
-
-    <h3>Схема решения</h3>
-    <select id="solver">
-      <option value="steady">Стационар (прямой) — рекомендуется</option>
-      <option value="implicit">Неявный Эйлер (A-устойчив)</option>
-      <option value="explicit">Явный Эйлер (для сравнения)</option>
-    </select>
-    <div class="note" id="solvernote"></div>
-    <div class="row" style="margin-top:6px">
-      <div><label>Время расчёта, с</label><input id="Ttot" type="number" value="120"></div>
-      <div><label>Выходная хар-ка</label><select id="output"></select></div>
-    </div>
-    <label>Шаги Δt, с (наложить кривые)</label>
-    <div class="chips" id="dtchips"></div>
-    <div class="row" style="margin-top:6px">
-      <div><label>Добавить Δt</label><input id="dtadd" type="number" step="0.1"></div>
-      <div style="display:flex;align-items:end"><button class="run sec" style="margin:0" onclick="addDt()">+ добавить</button></div>
-    </div>
-
-    <h3>Целевой интервал (метрика)</h3>
-    <div class="row">
-      <div><label>Нижняя граница</label><input id="lo" type="number" step="any"></div>
-      <div><label>Верхняя граница</label><input id="hi" type="number" step="any"></div>
-    </div>
-    <div class="note">Метрика — попадание установившегося значения в интервал. На графике сходимости интервал показан зелёной полосой.</div>
-
-    <label style="margin-top:10px"><input type="checkbox" id="cmpAll" style="width:auto"> сравнить все 3 схемы на графике сходимости</label>
-    <button class="run" onclick="runSingle()">▶ Рассчитать</button>
-    <div class="note" id="status"></div>
-  </aside>
-  <main class="main">
-    <div class="kpis" id="kpis"></div>
-    <div class="card"><div id="plotT" style="height:400px"></div></div>
-    <div class="card"><div id="plotC" style="height:360px"></div></div>
-    <div class="note" id="legend"></div>
-  </main>
-</div>
 
 <!-- ============ РЕЖИМ: СВЯЗКА ============ -->
 <div class="wrap hide" id="view-chain">
@@ -226,7 +180,7 @@
 </div>
 
 <!-- ============ РЕЖИМ: АППАРАТЫ (параметры/сенсоры/тесты) ============ -->
-<div class="wrap hide" id="view-apps">
+<div class="wrap" id="view-apps">
   <aside class="side">
     <h3>Аппарат</h3>
     <select id="a_dev" onchange="onApp()"></select>
@@ -964,19 +918,16 @@ function renderSensors(){const app=el('a_dev').value, res=A_RES&&A_RES.sensors;
 
 /* ===================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ===================== */
 function setMode(m){
-  el('view-single').classList.toggle('hide',m!=='single');
   el('view-chain').classList.toggle('hide',m!=='chain');
   el('view-apps').classList.toggle('hide',m!=='apps');
-  el('tab-single').classList.toggle('on',m==='single');
   el('tab-chain').classList.toggle('on',m==='chain');
   el('tab-apps').classList.toggle('on',m==='apps');
   if(m==='chain'){if(!UNITS.length){UNITS=[{type:'HRU',Th_in:585,mdot_h:20,UA:8},{type:'FHE',Th_in:700,mdot_h:20,UA:7},{type:'EOH',Power:180}];}renderUnits();
     if(el('topology').value==='loop'){initLStat();runLoop();}else runChain();}
-  if(m==='apps'){if(!el('a_dev').options.length){buildAppSelect();onApp();}}
+  if(m==='apps'){if(!el('a_dev').options.length){buildAppSelect();}onApp();}
 }
 
-/* init */
-buildDeviceSelect(); onDevice(); buildDtChips(); el('solver').onchange=solverNote; solverNote(); runSingle();
+/* init — стартуем на вкладке «Аппараты» */
 buildAppSelect(); onApp();
 </script>
 </body>

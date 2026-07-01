@@ -69,41 +69,42 @@
   <aside class="side">
     <h3>Топология</h3>
     <select id="topology" onchange="setTopology()">
-      <option value="open">Открытая цепочка (масло проходит насквозь)</option>
       <option value="loop">Замкнутый контур масла (насос + резервуар + утилизатор)</option>
+      <option value="open">Открытая цепочка (масло проходит насквозь)</option>
     </select>
 
+    <h3>Станции (аппараты) <span class="note" style="display:inline">(масло по порядку; ▲▼ — переставить; ⚙ — все параметры)</span></h3>
+    <div id="lunits"></div>
+    <div class="row">
+      <div><select id="laddtype">
+        <option value="CHE">CHE — рекуператор (полная модель)</option>
+        <option value="FHE">FHE — печной (полная модель)</option>
+        <option value="HRU">HRU — утилизатор (полная модель)</option>
+        <option value="EOH">EOH — электроподогрев (полная модель)</option>
+        <option value="FURN">Печь-утилизатор (смеситель+CH₄)</option>
+        <option value="LOAD">Потребитель (масло→процесс)</option>
+      </select></div>
+      <div><button class="run sec" style="margin:0" onclick="addLStat()">+ станция</button></div>
+    </div>
+
     <!-- ----- ПАНЕЛЬ: ОТКРЫТАЯ ЦЕПОЧКА ----- -->
-    <div id="panel-open">
-      <h3>Общий контур масла</h3>
+    <div id="panel-open" class="hide">
+      <h3>Масло (вход цепочки)</h3>
       <div class="row3">
         <div><label>T масла вход, °C</label><input id="c_Tin" type="number" value="120"></div>
         <div><label>Расход масла, кг/с</label><input id="c_mdot" type="number" value="15"></div>
-        <div><label>cp учитывать</label><select id="c_cp"><option value="1">да (TH59)</option><option value="0">конст</option></select></div>
+        <div><label>cp</label><select id="c_cp"><option value="1">TH59</option><option value="0">конст</option></select></div>
       </div>
-
-      <h3>Цепочка аппаратов <span class="note" style="display:inline">(масло проходит последовательно)</span></h3>
-      <div id="units"></div>
+      <h3>Целевой интервал по T масла на выходе, °C</h3>
       <div class="row">
-        <div><select id="addtype">
-          <option value="HRU">HRU — утилизатор тепла (газ→масло)</option>
-          <option value="FHE">FHE — печной (газ→масло)</option>
-          <option value="CHE">CHE — рекуператор (газ→масло)</option>
-          <option value="EOH">EOH — огневой подогрев (электро)</option>
-        </select></div>
-        <div><button class="run sec" style="margin:0" onclick="addUnit()">+ аппарат</button></div>
-      </div>
-
-      <h3>Целевой интервал по T масла на выходе цепочки</h3>
-      <div class="row">
-        <div><label>Нижняя, °C</label><input id="c_lo" type="number" value="258"></div>
-        <div><label>Верхняя, °C</label><input id="c_hi" type="number" value="266"></div>
+        <div><label>Нижняя</label><input id="c_lo" type="number" value="200"></div>
+        <div><label>Верхняя</label><input id="c_hi" type="number" value="300"></div>
       </div>
       <button class="run" onclick="runChain()">▶ Рассчитать цепочку</button>
     </div>
 
     <!-- ----- ПАНЕЛЬ: ЗАМКНУТЫЙ КОНТУР ----- -->
-    <div id="panel-loop" class="hide">
+    <div id="panel-loop">
       <h3>Масло в контуре (циркуляция через насос)</h3>
       <div class="row3">
         <div><label>T масла нач., °C</label><input id="l_Toil0" type="number" value="120"></div>
@@ -124,20 +125,6 @@
         <div><label>T среды, °C</label><input id="l_Tamb" type="number" value="20"></div>
       </div>
 
-      <h3>Станции контура <span class="note" style="display:inline">(масло идёт по порядку сверху вниз; ▲▼ — переставить)</span></h3>
-      <div id="lunits"></div>
-      <div class="row">
-        <div><select id="laddtype">
-          <option value="FURN">Печь-утилизатор (смеситель+CH₄→дым.газ→масло)</option>
-          <option value="HRU">HRU — утилизатор (газ→масло)</option>
-          <option value="FHE">FHE — печной (газ→масло)</option>
-          <option value="CHE">CHE — рекуператор (газ→масло)</option>
-          <option value="EOH">EOH — огневой (электро)</option>
-          <option value="LOAD">Потребитель (масло→процесс)</option>
-        </select></div>
-        <div><button class="run sec" style="margin:0" onclick="addLStat()">+ станция</button></div>
-      </div>
-
       <h3>Схема решения (нагрев контура)</h3>
       <select id="l_solver">
         <option value="steady">Стационар (рецикл + под-релаксация) — рекомендуется</option>
@@ -151,8 +138,8 @@
 
       <h3>Целевой интервал T масла, °C</h3>
       <div class="row">
-        <div><label>Нижняя</label><input id="l_lo" type="number" value="245"></div>
-        <div><label>Верхняя</label><input id="l_hi" type="number" value="262"></div>
+        <div><label>Нижняя</label><input id="l_lo" type="number" value="225"></div>
+        <div><label>Верхняя</label><input id="l_hi" type="number" value="250"></div>
       </div>
       <button class="run" onclick="runLoop()">▶ Рассчитать контур</button>
     </div>
@@ -160,14 +147,14 @@
   </aside>
   <main class="main">
     <!-- ----- ВЫВОД: ОТКРЫТАЯ ЦЕПОЧКА ----- -->
-    <div id="main-open">
+    <div id="main-open" class="hide">
       <div class="kpis" id="ckpis"></div>
       <div class="card"><div id="plotChain" style="height:380px"></div></div>
       <div class="card"><div id="chainTable"></div></div>
-      <div class="note">Метод связки — sequential-modular: выход масла одного аппарата подаётся на вход следующего; каждый узел решается в стационаре (ε-NTU для теплообменников, прямой баланс для EOH). Устойчиво и без итерационных срывов.</div>
+      <div class="note">Метод связки — sequential-modular: выход масла одного аппарата подаётся на вход следующего; каждый узел решается полной моделью аппарата (α из геометрии, тепло газ→масло). Ниже — сенсоры каждого аппарата.</div>
     </div>
     <!-- ----- ВЫВОД: ЗАМКНУТЫЙ КОНТУР ----- -->
-    <div id="main-loop" class="hide">
+    <div id="main-loop">
       <div class="kpis" id="lkpis"></div>
       <div class="card"><div id="loopSchema"></div></div>
       <div class="card"><div id="plotLoopProfile" style="height:360px"></div></div>
@@ -328,8 +315,10 @@ const PHYS=(function(){
     const fric=(md,pr)=>{const v=md/(pr.rho*A),Re=v*pr.rho*p0.d_TEH/pr.eta,cS=3.2+0.66*Math.pow(0.7,1.5),sg=sig((Re-100)/100);
       const zeta=(nRow+1)*(cS*Math.pow(100,-0.27)*(1-sg)+cS*Math.pow(Re+1,-0.27)*sg);
       return p0.k_delta_DP*zeta*pr.rho*v*v/2/1000+p0.coef_deltaP_Valve*md*md;};
-    let Tm=Tin+15,md=1,pr;
-    for(let it=0;it<40;it++){pr=oilP(Tm);let a=1e-3,b=200;for(let i=0;i<70;i++){const m=(a+b)/2;(fric(m,pr)<dP?a=m:b=m);}md=(a+b)/2;
+    const impose=bc.imposed&&bc.oil.m>0;               // в контуре расход масла задаёт насос
+    let Tm=Tin+15,md=impose?bc.oil.m:1,pr;
+    for(let it=0;it<40;it++){pr=oilP(Tm);
+      if(!impose){let a=1e-3,b=200;for(let i=0;i<70;i++){const m=(a+b)/2;(fric(m,pr)<dP?a=m:b=m);}md=(a+b)/2;}
       const Tout=Tin+Q/Math.max(md*pr.cp,1e-6),nm=(Tin+Tout)/2;if(Math.abs(nm-Tm)<1e-4){Tm=nm;break;}Tm=nm;}
     const v=md/(pr.rho*A),Re=v*pr.rho*p0.d_TEH/pr.eta,Pr=pr.eta*pr.cp/pr.lam;
     const Nu=smFun(1,0.64*Math.pow(Re,0.5)*Math.pow(Pr,0.33),Re,10,10),alpha=Nu*pr.lam/p0.d_TEH,Tout=Tin+Q/Math.max(md*pr.cp,1e-6);
@@ -478,7 +467,7 @@ function solveStep(d,p,outKey,dt,Ttot,scheme){
     t.push(i*dt); y.push(d.out(x,p)[outKey]);
     if(scheme==='explicit'){ x=x+dt*f(x); }
     else { let a=x-2e4,b=x+2e4; const g=xn=>xn-x-dt*f(xn);
-      for(let k=0;k<200;k++){const c=.5*(a+b);(g(c)<0?a=c:b=c);} x=.5*(a+b); }
+      for(let k=0;k<80;k++){const c=.5*(a+b);(g(c)<0?a=c:b=c);} x=.5*(a+b); }
     if(!isFinite(x)||Math.abs(x)>1e7) break;
   }
   return {t,y};
@@ -553,49 +542,42 @@ function layout(title,xt,yt){return {title:{text:title,font:{color:'#e6edf3',siz
 function cfg(){return {responsive:true,displayModeBar:false};}
 
 /* ===================== СВЯЗКА ===================== */
-let UNITS=[];
-const UNIT_DEF={
-  HRU:{label:'HRU (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:585,mdot_h:20,UA:8}},
-  FHE:{label:'FHE (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:700,mdot_h:20,UA:7}},
-  CHE:{label:'CHE (газ→масло)',f:['Th_in','mdot_h','UA'],d:{Th_in:639,mdot_h:18,UA:7}},
-  EOH:{label:'EOH (электро)',f:['Power'],d:{Power:180}}
-};
-function addUnit(){const t=el('addtype').value;UNITS.push({type:t,...JSON.parse(JSON.stringify(UNIT_DEF[t].d))});renderUnits();}
-function delUnit(i){UNITS.splice(i,1);renderUnits();}
-function renderUnits(){const box=el('units');box.innerHTML='';
-  UNITS.forEach((u,i)=>{const def=UNIT_DEF[u.type];const d=document.createElement('div');d.className='unit';
-    let inner='<div class="hd"><b>'+(i+1)+'. '+def.label+'</b><span class="x" onclick="delUnit('+i+')">✕</span></div><div class="row3">';
-    def.f.forEach(f=>{const lab={Th_in:'T газа,°C',mdot_h:'расход газа',UA:'UA,кВт/К',Power:'Мощность,кВт'}[f];
-      inner+='<div><label>'+lab+'</label><input type="number" step="any" oninput="UNITS['+i+'].'+f+'=parseFloat(this.value)" value="'+u[f]+'"></div>';});
-    inner+='</div>';d.innerHTML=inner;box.appendChild(d);});
-  if(!UNITS.length)box.innerHTML='<div class="note">Добавьте аппараты в цепочку — масло пойдёт через них последовательно.</div>';
-}
+// Открытая цепочка — один проход масла через общий список станций LSTAT (полные модели PHYS).
 function runChain(){
-  if(!UNITS.length){el('cstatus').textContent='Добавьте хотя бы один аппарат';return;}
+  if(!LSTAT.length){el('cstatus').textContent='Добавьте хотя бы одну станцию';return;}
   const oilM=parseFloat(el('c_mdot').value), useCp=el('c_cp').value==='1';
+  const cpOf=Tc=>useCp?oilCp(Tc+273.15):2.0;
   let T=parseFloat(el('c_Tin').value);
   const prof=[T], rows=[];
-  UNITS.forEach((u,i)=>{
-    let Tout,Q;
-    if(u.type==='EOH'){ const cp=useCp?oilCp(((T+273.15)+(T+273.15))/2):2.0; Q=u.Power; Tout=T+Q/(oilM*cp); }
-    else{ const r=hxNTU({Th_in:u.Th_in,mdot_h:u.mdot_h,mdot_c:oilM,UA_h:2*u.UA,UA_c:2*u.UA}, T); Tout=r.Tc_out; Q=r.Q; }
-    rows.push({n:i+1,type:u.type,Tin:T,Tout,Q}); T=Tout; prof.push(T);
-  });
+  LSTAT.forEach((st,i)=>{const def=LSTAT_DEF[st.type], cp=cpOf(T); let Tout,Q,sensors=null,info='';
+    if(def.app){const r=PHYS.run(st.type,st.params,{gas:st.gas,oil:{T,m:oilM,Pin:1300,Pout:1250},imposed:true});
+      const s=r.sensors; Tout=(s.OIL_OUT_TEMP!=null?s.OIL_OUT_TEMP:s.T_out_oil); Q=oilM*cp*(Tout-T); sensors=s;
+      info=st.gas?('газ '+st.gas.T+'→'+(s.GAS_OUT_TEMP!=null?s.GAS_OUT_TEMP.toFixed(1):'?')+'°C'):'электроподогрев';}
+    else if(def.kind==='furn'){const fr=furnace(st),r=hxHeat({Thin:fr.Tflame,mGas:fr.mFlue,UA:st.UA},T,cp,oilM);Tout=r.Tout;Q=r.Q;info='пламя '+fr.Tflame.toFixed(0)+'°C → выброс';}
+    else{const r=hxLoad(st,T,cp,oilM);Tout=r.Tout;Q=r.Q;info='отбор на процесс '+st.Tp+'°C';}
+    rows.push({n:i+1,type:st.type,label:def.slabel,Tin:T,Tout,Q,info,sensors,kind:def.app?(st.type==='EOH'?'elec':'gas'):def.kind}); T=Tout; prof.push(T);});
   const lo=parseFloat(el('c_lo').value),hi=parseFloat(el('c_hi').value),inb=T>=lo&&T<=hi;
-  // график профиля
-  const xs=['вход']; UNITS.forEach((u,i)=>xs.push((i+1)+'.'+u.type));
+  // профиль
+  const xs=['вход'], mcol=['#9aa7b4']; LSTAT.forEach((st,i)=>{xs.push((i+1)+'.'+st.type);
+    mcol.push(rows[i].kind==='load'?'#3bd0d0':(rows[i].kind==='elec'?'#a978ff':(rows[i].kind==='furn'?'#ff8c42':'#2ec27e')));});
   const lay=layout('Профиль температуры масла вдоль цепочки','узел','T масла, °C');
   lay.shapes=[{type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:lo,y1:hi,fillcolor:'rgba(46,194,126,0.13)',line:{width:0}}];
-  Plotly.newPlot('plotChain',[{x:xs,y:prof,mode:'lines+markers',line:{shape:'hv',color:'#4ea1ff',width:2},marker:{size:9}}],lay,cfg());
-  // таблица
-  let html='<table><tr><th>№</th><th>аппарат</th><th>T вход,°C</th><th>T выход,°C</th><th>Q,кВт</th></tr>';
-  rows.forEach(r=>html+='<tr><td>'+r.n+'</td><td>'+r.type+'</td><td>'+r.Tin.toFixed(1)+'</td><td>'+r.Tout.toFixed(1)+'</td><td>'+r.Q.toFixed(0)+'</td></tr>');
-  html+='</table>';el('chainTable').innerHTML=html;
-  // KPI
-  el('ckpis').innerHTML='<div class="kpi '+(inb?'ok':'bad')+'"><b>'+T.toFixed(1)+' °C</b><span>T масла на выходе цепочки <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'+
-    '<div class="kpi"><b>'+rows.reduce((s,r)=>s+r.Q,0).toFixed(0)+' кВт</b><span>суммарный тепловой поток</span></div>'+
+  Plotly.newPlot('plotChain',[{x:xs,y:prof,mode:'lines+markers',line:{color:'#4ea1ff',width:2.4},marker:{size:11,color:mcol}}],lay,cfg());
+  // таблица узлов
+  let html='<table><tr><th>№</th><th>аппарат</th><th>T вход,°C</th><th>T выход,°C</th><th>Q,кВт</th><th>примечание</th></tr>';
+  rows.forEach(r=>{const dT=r.Tout-r.Tin;html+='<tr><td>'+r.n+'</td><td>'+r.label+' ['+r.type+']</td><td>'+r.Tin.toFixed(1)+'</td><td>'+r.Tout.toFixed(1)+'</td><td>'+(dT>=0?'+':'')+r.Q.toFixed(0)+'</td><td>'+r.info+'</td></tr>';});
+  html+='</table>';
+  // сенсоры аппаратов-станций
+  rows.forEach(r=>{if(!r.sensors)return;
+    html+='<table style="margin-top:10px"><tr><th>'+r.n+'. '+r.label+' ['+r.type+'] — сенсоры</th><th>значение</th><th>ед.</th></tr>';
+    APPDATA.sensors[r.type].forEach(sd=>{const v=r.sensors[sd.n];if(v==null)return;
+      html+='<tr><td><code>'+sd.n+'</code> '+sd.d+'</td><td>'+(typeof v==='number'?v.toFixed(Math.abs(v)<10?4:2):v)+'</td><td>'+(sd.u||'—')+'</td></tr>';});
+    html+='</table>';});
+  el('chainTable').innerHTML=html;
+  el('ckpis').innerHTML='<div class="kpi '+(inb?'ok':'bad')+'"><b>'+T.toFixed(1)+' °C</b><span>T масла на выходе <span class="badge '+(inb?'ok">в интервале':'bad">вне')+'</span></span></div>'+
+    '<div class="kpi"><b>'+rows.reduce((s,r)=>s+r.Q,0).toFixed(0)+' кВт</b><span>суммарный Q</span></div>'+
     '<div class="kpi"><b>'+(T-prof[0]).toFixed(1)+' °C</b><span>нагрев масла за цепочку</span></div>';
-  el('cstatus').textContent='Готово · узлов: '+UNITS.length;
+  el('cstatus').textContent='Готово · станций: '+LSTAT.length;
 }
 
 /* ===================== ЗАМКНУТЫЙ КОНТУР МАСЛА =====================
@@ -606,28 +588,56 @@ function runChain(){
    Равновесие: подвод тепла + насос = отбор потребителя + потери в среду. */
 /* --- настраиваемый список станций контура (add/del/reorder), как в открытой цепочке --- */
 let LSTAT=[];
+// app:true — полная модель аппарата (PHYS, все параметры + сенсоры); иначе простая станция контура
 const LSTAT_DEF={
+  CHE: {slabel:'Рекуператор CHE', app:true},
+  FHE: {slabel:'Печной FHE',      app:true},
+  HRU: {slabel:'Утилизатор HRU',  app:true},
+  EOH: {slabel:'Электроподогрев EOH', app:true},
   FURN:{slabel:'Печь-утилизатор', kind:'furn', f:['mCH4','alpha','Tair','UA'], d:{mCH4:0.05,alpha:1.1,Tair:20,UA:8}},
-  HRU: {slabel:'Утилизатор HRU', kind:'gas', f:['Thin','mGas','UA'], d:{Thin:585,mGas:20,UA:8}},
-  FHE: {slabel:'Печной FHE',     kind:'gas', f:['Thin','mGas','UA'], d:{Thin:700,mGas:20,UA:7}},
-  CHE: {slabel:'Рекуператор CHE', kind:'gas', f:['Thin','mGas','UA'], d:{Thin:639,mGas:18,UA:7}},
-  EOH: {slabel:'Огневой EOH',    kind:'elec',f:['Power'],            d:{Power:180}},
-  LOAD:{slabel:'Потребитель',    kind:'load',f:['Tp','C','UA'],      d:{Tp:150,C:26,UA:28}}
+  LOAD:{slabel:'Потребитель',     kind:'load', f:['Tp','C','UA'],               d:{Tp:150,C:26,UA:28}}
 };
-const LFLD={Thin:'T газа,°C',mGas:'расход газа',UA:'UA,кВт/К',Power:'Мощность,кВт',Tp:'T процесса,°C',C:'C проц.,кВт/К',
-  mCH4:'CH₄, кг/с',alpha:'α возд.',Tair:'T смеси,°C'};
-function defLStat(t){return {type:t,...JSON.parse(JSON.stringify(LSTAT_DEF[t].d))};}
-function addLStat(){LSTAT.push(defLStat(el('laddtype').value));renderLStat();runLoop();}
-function delLStat(i){LSTAT.splice(i,1);renderLStat();runLoop();}
-function moveLStat(i,d){const j=i+d;if(j<0||j>=LSTAT.length)return;const t=LSTAT[i];LSTAT[i]=LSTAT[j];LSTAT[j]=t;renderLStat();runLoop();}
+const LFLD={Tp:'T процесса,°C',C:'C проц.,кВт/К',UA:'UA,кВт/К',mCH4:'CH₄, кг/с',alpha:'α возд.',Tair:'T смеси,°C'};
+function defLStat(t){const def=LSTAT_DEF[t];
+  if(!def.app) return {type:t,...JSON.parse(JSON.stringify(def.d))};
+  const params={}; APPDATA.params[t].forEach(p=>params[p.n]=p.v);
+  const t0=APPDATA.tests[t][0];
+  if(t0) APPDATA.params[t].forEach(p=>{const v=t0.params[p.n]; if(v!=null&&isFinite(v))params[p.n]=v;});
+  const st={type:t,params,open:false,rgm:t0?0:''};
+  if(t!=='EOH') st.gas=(t0&&t0.bc&&t0.bc.gas)?{T:t0.bc.gas.T,m:t0.bc.gas.m,fr:t0.bc.gas.fr}:{T:600,m:15,fr:[0.01,0.075,0.15,0.72,0]};
+  return st;}
+function runSel(){el('topology').value==='loop'?runLoop():runChain();}
+function addLStat(){LSTAT.push(defLStat(el('laddtype').value));renderLStat();runSel();}
+function delLStat(i){LSTAT.splice(i,1);renderLStat();runSel();}
+function moveLStat(i,d){const j=i+d;if(j<0||j>=LSTAT.length)return;const t=LSTAT[i];LSTAT[i]=LSTAT[j];LSTAT[j]=t;renderLStat();runSel();}
+function toggleLStat(i){LSTAT[i].open=!LSTAT[i].open;renderLStat();}
+function loadLStatRgm(i,ri){const st=LSTAT[i],t=st.type,tst=APPDATA.tests[t][ri];if(!tst)return;st.rgm=+ri;
+  APPDATA.params[t].forEach(p=>{const v=tst.params[p.n];if(v!=null&&isFinite(v))st.params[p.n]=v;});
+  if(st.gas&&tst.bc&&tst.bc.gas){st.gas.T=tst.bc.gas.T;st.gas.m=tst.bc.gas.m;st.gas.fr=tst.bc.gas.fr;}
+  renderLStat();runSel();}
 function renderLStat(){const box=el('lunits');box.innerHTML='';
   LSTAT.forEach((u,i)=>{const def=LSTAT_DEF[u.type];const d=document.createElement('div');d.className='unit';
     let inner='<div class="hd"><b>'+(i+1)+'. '+def.slabel+' <span style="opacity:.6">['+u.type+']</span></b>'
       +'<span class="x" title="вверх" onclick="moveLStat('+i+',-1)">▲</span>'
       +'<span class="x" title="вниз" onclick="moveLStat('+i+',1)">▼</span>'
-      +'<span class="x" title="удалить" onclick="delLStat('+i+')">✕</span></div><div class="row3">';
-    def.f.forEach(f=>{inner+='<div><label>'+LFLD[f]+'</label><input type="number" step="any" oninput="LSTAT['+i+'].'+f+'=parseFloat(this.value)" value="'+u[f]+'"></div>';});
-    inner+='</div>';d.innerHTML=inner;box.appendChild(d);});
+      +'<span class="x" title="удалить" onclick="delLStat('+i+')">✕</span></div>';
+    if(def.app){
+      // режим + газовые гранусловия + разворачиваемый полный набор параметров
+      let opts=APPDATA.tests[u.type].map((t,k)=>'<option value="'+k+'"'+(u.rgm===k?' selected':'')+'>'+t.name+'</option>').join('');
+      inner+='<div class="row"><div><label>Режим (тест)</label><select onchange="loadLStatRgm('+i+',this.value)">'+(opts||'<option>—</option>')+'</select></div>'
+        +'<div style="display:flex;align-items:end"><button class="run sec" style="margin:0" onclick="toggleLStat('+i+')">⚙ параметры ('+APPDATA.params[u.type].length+')</button></div></div>';
+      if(u.gas) inner+='<div class="row3"><div><label>T газа,°C</label><input type="number" step="any" oninput="LSTAT['+i+'].gas.T=parseFloat(this.value)" value="'+u.gas.T+'"></div>'
+        +'<div><label>расход газа,кг/с</label><input type="number" step="any" oninput="LSTAT['+i+'].gas.m=parseFloat(this.value)" value="'+u.gas.m+'"></div><div></div></div>';
+      if(u.open){inner+='<div class="lp"><table class="atbl"><tr><th>параметр</th><th>значение</th><th>ед.</th></tr>';
+        APPDATA.params[u.type].forEach(p=>{inner+='<tr><td title="'+p.d+'"><code>'+p.n+'</code></td>'
+          +'<td><input type="number" step="any" style="width:90px" oninput="LSTAT['+i+'].params[\''+p.n+'\']=parseFloat(this.value)" value="'+(u.params[p.n]==null?'':u.params[p.n])+'"></td><td>'+(p.u||'—')+'</td></tr>';});
+        inner+='</table></div>';}
+    } else {
+      inner+='<div class="row3">';
+      def.f.forEach(f=>{inner+='<div><label>'+LFLD[f]+'</label><input type="number" step="any" oninput="LSTAT['+i+'].'+f+'=parseFloat(this.value)" value="'+u[f]+'"></div>';});
+      inner+='</div>';
+    }
+    d.innerHTML=inner;box.appendChild(d);});
   if(!LSTAT.length)box.innerHTML='<div class="note">Добавьте станции — масло пойдёт через них по порядку и вернётся в резервуар.</div>';
 }
 function loopParams(){
@@ -683,13 +693,18 @@ function loopMarch(P,Tres){
   let T=Tres+dTpump; const steps=[];
   P.stations.forEach(st=>{
     const def=LSTAT_DEF[st.type], base={key:st.type,label:def.slabel,Tin:T};
-    if(def.kind==='gas'){const r=hxHeat(st,T,cp,P.mOil);
-      steps.push({...base,kind:'gas',Tout:r.Tout,Q:r.Q,gas_in:st.Thin,gas_out:r.Tgas_out}); T=r.Tout;}
+    if(def.app){
+      // полная модель аппарата: PHYS.run с заданным расходом масла (насос) и гранусловиями газа
+      const r=PHYS.run(st.type, st.params, {gas:st.gas, oil:{T,m:P.mOil,Pin:1300,Pout:1250}, imposed:true});
+      const s=r.sensors, Tout=(s.OIL_OUT_TEMP!=null?s.OIL_OUT_TEMP:s.T_out_oil);
+      const Q=P.mOil*cp*(Tout-T);                                  // энергобаланс контура — на loopCp
+      steps.push({...base,kind:st.type==='EOH'?'elec':'gas',Tout,Q,sensors:s,extra:r.extra,
+        gas_in:st.gas?st.gas.T:null,gas_out:s.GAS_OUT_TEMP,
+        alpha:(s.ID_SENSOR_alphaCC!=null?s.ID_SENSOR_alphaCC:(s.alphaRC!=null?s.alphaRC:s.alpha_oil))}); T=Tout;
+    }
     else if(def.kind==='furn'){const fr=furnace(st), r=hxHeat({Thin:fr.Tflame,mGas:fr.mFlue,UA:st.UA},T,cp,P.mOil);
       steps.push({...base,kind:'furn',Tout:r.Tout,Q:r.Q,gas_in:fr.Tflame,gas_out:r.Tgas_out,
         mCH4:st.mCH4,alpha:st.alpha,mAir:fr.mAir,mFlue:fr.mFlue,Tflame:fr.Tflame,Qcomb:fr.Qcomb}); T=r.Tout;}
-    else if(def.kind==='elec'){const q=st.Power, Tout=T+q/Math.max(P.mOil*cp,TINY);
-      steps.push({...base,kind:'elec',Tout,Q:q}); T=Tout;}
     else if(def.kind==='load'){const r=hxLoad(st,T,cp,P.mOil);
       steps.push({...base,kind:'load',Tout:r.Tout,Q:r.Q,proc_in:st.Tp,proc_out:r.Tproc_out}); T=r.Tout;}
   });
@@ -833,15 +848,22 @@ function runLoop(){
         +'</td><td>'+s.Qcomb.toFixed(0)+'</td><td>'+s.Q.toFixed(0)+'</td></tr>';});
       html+='</table>';
     }
+    // сенсоры аппаратов-станций (полные модели PHYS)
+    S.steps.forEach((s,i)=>{if(!s.sensors)return;
+      html+='<table style="margin-top:10px"><tr><th>'+(i+1)+'. '+s.label+' ['+s.key+'] — сенсоры</th><th>значение</th><th>ед.</th></tr>';
+      APPDATA.sensors[s.key].forEach(sd=>{const v=s.sensors[sd.n]; if(v==null)return;
+        html+='<tr><td><code>'+sd.n+'</code> '+sd.d+'</td><td>'+(typeof v==='number'?v.toFixed(Math.abs(v)<10?4:2):v)+'</td><td>'+(sd.u||'—')+'</td></tr>';});
+      html+='</table>';});
     el('loopTable').innerHTML=html;
     el('cstatus').textContent='Готово · равновесие '+S.Tres.toFixed(1)+' °C за '+S.iters+' итераций рецикла';
   },20);
 }
-function initLStat(){if(!LSTAT.length)LSTAT=['FURN','FHE','EOH','LOAD'].map(defLStat);renderLStat();}
+function initLStat(){if(!LSTAT.length)LSTAT=['FURN','HRU','EOH','LOAD'].map(defLStat);renderLStat();}
 function setTopology(){const t=el('topology').value,loop=t==='loop';
   el('panel-open').classList.toggle('hide',loop); el('panel-loop').classList.toggle('hide',!loop);
   el('main-open').classList.toggle('hide',loop);  el('main-loop').classList.toggle('hide',!loop);
-  if(loop){initLStat();runLoop();}else runChain();
+  initLStat();
+  if(loop)runLoop();else runChain();
 }
 
 /* ===================== АППАРАТЫ: параметры/сенсоры/тесты из C++ ===================== */
@@ -922,8 +944,8 @@ function setMode(m){
   el('view-apps').classList.toggle('hide',m!=='apps');
   el('tab-chain').classList.toggle('on',m==='chain');
   el('tab-apps').classList.toggle('on',m==='apps');
-  if(m==='chain'){if(!UNITS.length){UNITS=[{type:'HRU',Th_in:585,mdot_h:20,UA:8},{type:'FHE',Th_in:700,mdot_h:20,UA:7},{type:'EOH',Power:180}];}renderUnits();
-    if(el('topology').value==='loop'){initLStat();runLoop();}else runChain();}
+  if(m==='chain'){initLStat();
+    if(el('topology').value==='loop')runLoop();else runChain();}
   if(m==='apps'){if(!el('a_dev').options.length){buildAppSelect();}onApp();}
 }
 

@@ -150,23 +150,30 @@
     </div>
     <!-- ----- ПАНЕЛЬ: ПЕЧЬ ОПГМ (смеситель → FHE → CHE) ----- -->
     <div id="panel-furnace" class="hide">
-      <h3>Топливо (идеальный смеситель)</h3>
-      <div class="row3">
-        <div><label>CH₄, кг/с</label><input id="f_mCH4" type="number" step="0.05" value="0.9"></div>
-        <div><label>Избыток возд. α</label><input id="f_alpha" type="number" step="0.05" value="1.15"></div>
-        <div><label>T смеси, °C</label><input id="f_Tmix" type="number" value="20"></div>
-      </div>
-      <h3>Масло (вход сверху в CHE)</h3>
+      <h3>Топливная смесь (CH₄ 93% + N₂ 7% мол.)</h3>
       <div class="row">
-        <div><label>T масла вход, °C</label><input id="f_Toil" type="number" value="120"></div>
-        <div><label>Расход масла, кг/с</label><input id="f_mOil" type="number" value="100"></div>
+        <div><label>Расход, кг/с (3240 кг/ч)</label><input id="f_mFuel" type="number" step="0.05" value="0.9"></div>
+        <div><label>T потоков, °C</label><input id="f_Tmix" type="number" value="20"></div>
+      </div>
+      <h3>Окислитель (O₂ + N₂, стехиометрия)</h3>
+      <div class="row">
+        <div><label>O₂, масс. доля</label><input id="f_wO2" type="number" step="0.005" value="0.162"></div>
+        <div><label>расход — по стехиометрии</label><input id="f_mOx" type="number" disabled></div>
+      </div>
+      <h3>Масло (вход сверху в CHE) — режим 714</h3>
+      <div class="row">
+        <div><label>T масла вход, °C</label><input id="f_Toil" type="number" value="192.2"></div>
+        <div><label>Расход, кг/с (750 т/ч)</label><input id="f_mOil" type="number" value="208.33"></div>
       </div>
       <button class="run" onclick="runFurnaceChain()">▶ Рассчитать печь</button>
-      <div class="note" style="margin-top:8px">Воздух и метан смешиваются в <b>идеальном смесителе</b>
-        и снизу подаются в <b>FHE</b> (радиантная камера): смесь сгорает → дымовые газы идут
-        <b>снизу вверх</b> через узел в <b>CHE</b> (конвективная камера) и в трубу.
-        Масло идёт навстречу: сверху в <b>CHE</b> (конвекция), через узел — в <b>FHE</b>
-        (излучение + конвекция), выход — в верхней части FHE.</div>
+      <div class="note" style="margin-top:8px"><b>Топливная смесь</b> (CH₄+N₂) и <b>окислитель</b>
+        (O₂+N₂, расход по стехиометрии: весь O₂ сжигает весь CH₄) смешиваются в
+        <b>идеальном смесителе</b> и снизу подаются в <b>FHE</b> (радиантная камера): смесь сгорает →
+        дымовые газы идут <b>снизу вверх</b> через узел в <b>CHE</b> (конвективная камера) и в трубу.
+        Масло навстречу: сверху в <b>CHE</b> (конвекция), через узел — в <b>FHE</b>
+        (излучение + конвекция), выход — в верхней части FHE. Геометрия камер — из чертежа
+        ОПГМ (∅219×8; радиация 56 труб; конвекция 28 гладких + 88 оребрённых; 4 потока);
+        эталон — паспорт <b>режима 714</b>.</div>
     </div>
     <div class="note" id="cstatus"></div>
   </aside>
@@ -191,6 +198,8 @@
     <!-- ----- ВЫВОД: ПЕЧЬ ОПГМ ----- -->
     <div id="main-furnace" class="hide">
       <div class="kpis" id="fkpis"></div>
+      <h3>Проверка геометрии · площади теплоотдачи (чертёж ОПГМ) и сверка с режимом 714</h3>
+      <div class="card"><div id="furnGeo"></div></div>
       <div class="card"><div id="furnSchema"></div></div>
       <h3>Сенсоры FHE (радиантная камера)</h3>
       <div class="card"><div id="furnSensF"></div></div>
@@ -1040,19 +1049,31 @@ function setTopology(){const t=el('topology').value;
 }
 
 /* ===================== ПЕЧЬ ОПГМ: смеситель → FHE (радиация) → CHE (конвекция) ===================== */
-// идеальный смеситель: CH₄ + воздух (α — избыток); мольные доли для модели FHE (fr[0]=CH₄, fr[4]=O₂)
-function idealMixer(mCH4,a,TmixC){
-  const mAir=a*L0_CH4*mCH4, mMix=mAir+mCH4;
-  const nCH4=mCH4/16, nAir=mAir/28.97, nT=nCH4+nAir;
-  return {mCH4,mAir,mMix,T:TmixC,fr:[nCH4/nT,0,0,0.79*nAir/nT,0.21*nAir/nT,0],
-    cpMix:(mCH4*PHYS.methaneP(TmixC+273.15).cp+mAir*PHYS.airP(TmixC+273.15).cp)/Math.max(mMix,TINY)};
+// геометрия камер из чертежа ОПГМ (пусковой нагреватель, режим 714): трубы ∅219×8 (d_вн=0.203, δ=0.008),
+// 4 потока; радиация — 56 труб (14/поток), S=999.5 м²; конвекция — 28 гладких (7/поток) + 88 оребрённых
+// (22/поток), S = 192.6 (гладкие) / 5666.6 (оребрённые) м²; длины и рёбра — из равенства площадей.
+const OPGM_F={burnerModel:2,dPipeRC:0.203,deltaPipeRC:0.008,nPipeRC:14,lPipeRC:27.987,dRC:4.0};
+const OPGM_C={burnerModel:2,dPipeCC:0.203,deltaPipeCC:0.008,nPipeSmСС:7,nPipeCorСС:22,lPipeCC:10.786,
+  kRib:240,hRib:0.035,deltaRib:0.0012,s1:0.4,s2:0.3,s3:0.4,aCC:3.0,bCC:3.0};
+const OPGM_REF={S_rad:999.5,S_sm:192.6,S_fin:5666.6, oilNode:212.0,oilOut:262.0,Q:34400,gasRad:650,stack:220}; // паспорт 714
+// идеальный смеситель: ТОПЛИВНАЯ СМЕСЬ (CH₄ 93% + N₂ 7% мол.) + ОКИСЛИТЕЛЬ (O₂+N₂).
+// расход окислителя — ПО СТЕХИОМЕТРИИ: m_O₂ = 4·m_CH₄ (весь O₂ сжигает весь CH₄ без остатка).
+function idealMixer(mFuel,wO2,TmixC){
+  const MF=0.93*16+0.07*28, wCH4=0.93*16/MF;                 // масс. доля CH₄ в топл. смеси (0.8836)
+  const mCH4=wCH4*mFuel, mN2f=mFuel-mCH4;
+  const mO2=4*mCH4, mOx=mO2/Math.max(wO2,1e-6), mN2ox=mOx-mO2;
+  const mMix=mFuel+mOx;
+  const nCH4=mCH4/16, nN2=(mN2f+mN2ox)/28, nO2=mO2/32, nT=nCH4+nN2+nO2;
+  return {mFuel,mCH4,mOx,mO2,mMix,T:TmixC,fr:[nCH4/nT,0,0,nN2/nT,nO2/nT,0],
+    xO2mol:(wO2/32)/((wO2/32)+((1-wO2)/28))};
 }
 function runFurnaceChain(){
-  const inp={mCH4:parseFloat(el('f_mCH4').value)||0.9, alpha:parseFloat(el('f_alpha').value)||1.15,
-    Tmix:parseFloat(el('f_Tmix').value)||20, Toil:parseFloat(el('f_Toil').value)||120, mOil:parseFloat(el('f_mOil').value)||100};
-  const pF=Object.assign({},...APPDATA.params.FHE.map(p=>({[p.n]:p.v})));
-  const pC=Object.assign({},...APPDATA.params.CHE.map(p=>({[p.n]:p.v})));
-  const mx=idealMixer(inp.mCH4,inp.alpha,inp.Tmix);
+  const inp={mFuel:parseFloat(el('f_mFuel').value)||0.9, wO2:parseFloat(el('f_wO2').value)||0.162,
+    Tmix:parseFloat(el('f_Tmix').value)||20, Toil:parseFloat(el('f_Toil').value)||192.2, mOil:parseFloat(el('f_mOil').value)||208.33};
+  const pF=Object.assign({},...APPDATA.params.FHE.map(p=>({[p.n]:p.v})),OPGM_F);
+  const pC=Object.assign({},...APPDATA.params.CHE.map(p=>({[p.n]:p.v})),OPGM_C);
+  const mx=idealMixer(inp.mFuel,inp.wO2,inp.Tmix);
+  el('f_mOx').value=mx.mOx.toFixed(2);
   // фикс-точка по температуре узла масла: масло CHE→FHE, газ FHE→CHE (противоток по аппаратам)
   let ToilNode=inp.Toil+20, rF=null, rC=null, iters=0;
   for(let it=0;it<60;it++){iters=it+1;
@@ -1066,14 +1087,25 @@ function runFurnaceChain(){
   const F={mx,inp,iters,Tflame:rF.extra['T_пламени,°C'],Qcomb:rF.extra['Q_сгор,кВт'],Qrad:rF.extra['Q_рад,кВт'],
     TgasNode:sF.GAS_OUT_TEMP, ToilNode, Tstack:sC.GAS_OUT_TEMP, ToilOut:sF.OIL_OUT_TEMP,
     QF:sF.Q, QC:sC.Q};
+  const cmp=(v,ref)=>{const d=100*(v-ref)/ref;return ' <span style="font-size:11px;color:'+(Math.abs(d)<=5?'#2ec27e':'#e0736b')+'">(714: '+ref+', '+(d>=0?'+':'')+d.toFixed(1)+'%)</span>';};
   el('fkpis').innerHTML=
-    '<div class="kpi"><b>'+F.ToilOut.toFixed(1)+' °C</b><span>масло на выходе (верх FHE)</span></div>'
-    +'<div class="kpi"><b>'+F.Tflame.toFixed(0)+' °C</b><span>T пламени (сгорание CH₄)</span></div>'
-    +'<div class="kpi"><b>'+F.TgasNode.toFixed(1)+' °C</b><span>узел газа FHE→CHE</span></div>'
-    +'<div class="kpi"><b>'+F.ToilNode.toFixed(1)+' °C</b><span>узел масла CHE→FHE</span></div>'
-    +'<div class="kpi"><b>'+F.Tstack.toFixed(1)+' °C</b><span>дым. газы в трубу</span></div>'
-    +'<div class="kpi"><b>'+F.Qcomb.toFixed(0)+' кВт</b><span>Q сгорания</span></div>'
-    +'<div class="kpi"><b>'+(F.QF+F.QC).toFixed(0)+' кВт</b><span>Q маслу (FHE '+F.QF.toFixed(0)+' + CHE '+F.QC.toFixed(0)+')</span></div>';
+    '<div class="kpi"><b>'+F.ToilOut.toFixed(1)+' °C</b><span>масло на выходе'+cmp(F.ToilOut,OPGM_REF.oilOut)+'</span></div>'
+    +'<div class="kpi"><b>'+F.ToilNode.toFixed(1)+' °C</b><span>масло после конвекции'+cmp(F.ToilNode,OPGM_REF.oilNode)+'</span></div>'
+    +'<div class="kpi"><b>'+((F.QF+F.QC)/1000).toFixed(2)+' МВт</b><span>Q маслу'+cmp(F.QF+F.QC,OPGM_REF.Q)+'</span></div>'
+    +'<div class="kpi"><b>'+F.TgasNode.toFixed(0)+' °C</b><span>газ из радиации'+cmp(F.TgasNode,OPGM_REF.gasRad)+'</span></div>'
+    +'<div class="kpi"><b>'+F.Tstack.toFixed(0)+' °C</b><span>газ из печи (труба)'+cmp(F.Tstack,OPGM_REF.stack)+'</span></div>'
+    +'<div class="kpi"><b>'+F.Tflame.toFixed(0)+' °C</b><span>T пламени · Q сгор '+F.Qcomb.toFixed(0)+' кВт</span></div>'
+    +'<div class="kpi"><b>'+F.mx.mOx.toFixed(2)+' кг/с</b><span>окислитель (O₂ '+(100*inp.wO2).toFixed(1)+'% масс, стехиометрия)</span></div>';
+  // проверка геометрии: площади теплоотдачи из модели vs чертёж
+  const aRow=(name,mod,ref)=>{const d=100*(mod-ref)/ref;
+    return '<tr><td style="text-align:left">'+name+'</td><td>'+mod.toFixed(1)+'</td><td>'+ref.toFixed(1)+'</td><td style="color:'+(Math.abs(d)<=1?'#2ec27e':'#e0736b')+';font-weight:600">'+(d>=0?'+':'')+d.toFixed(2)+' %</td></tr>';};
+  el('furnGeo').innerHTML='<table class="atbl"><tr><th>Площадь теплоотдачи</th><th>модель, м²</th><th>чертёж, м²</th><th>откл.</th></tr>'
+    +aRow('Радиантная часть (56 труб ∅219×8, 4 потока)',sF.sSideRC,OPGM_REF.S_rad)
+    +aRow('Конвективная: гладкие трубы (28 шт)',sC.sSideSMCCP,OPGM_REF.S_sm)
+    +aRow('Конвективная: оребрённые трубы (88 шт, с рёбрами)',sC.sSideCORCC,OPGM_REF.S_fin)
+    +'</table><div class="note" style="margin-top:6px">Геометрия: трубы ∅219×8 (d<sub>вн</sub>=0.203 м), 4 потока; длины труб — из чертежа; '
+    +'рёбра (шаг 240 шт/м, h=35 мм, δ=1.2 мм) дают коэффициент оребрения ψ≈9.36. '
+    +'Топливная смесь 93% CH₄ + 7% N₂ (мол.), окислитель O₂/N₂ по стехиометрии.</div>';
   el('furnSchema').innerHTML=furnaceSchematic(F);
   const senTbl=(app,s)=>{let h='<table class="atbl"><tr><th>сенсор</th><th>описание</th><th>значение</th></tr>';
     APPDATA.sensors[app].forEach(x=>{const v=s[x.n];h+='<tr><td><code>'+x.n+'</code></td><td>'+x.d+'</td><td>'+(v!=null&&isFinite(v)?(Math.abs(v)<10?v.toFixed(4):v.toFixed(2)):'—')+'</td></tr>';});
@@ -1115,17 +1147,17 @@ function furnaceSchematic(F){
   s+=ln(330,372,240,372,'#4ea1ff','fo')
     +svgTx(232,362,'#4ea1ff','Выход масла','end',11,'600')+svgTx(232,377,'#4ea1ff',T(F.ToilOut)+' °C','end',11)
     +svgTx(232,392,'#8b949e','(верх радиантной зоны)','end',9);
-  // ---- низ: узлы воздуха и метана → идеальный смеситель → в FHE снизу ----
-  s+=svgBx(300,600,110,34)+svgTx(355,622,'#39c5cf','Воздух',null,12,'600')
-    +svgTx(355,648,'#8b949e',F.mx.mAir.toFixed(2)+' кг/с · '+T(F.inp.Tmix)+' °C',null,9);
-  s+=svgBx(490,600,110,34)+svgTx(545,622,'#2ec27e','CH₄ (метан)',null,12,'600')
-    +svgTx(545,648,'#8b949e',F.mx.mCH4.toFixed(2)+' кг/с · '+T(F.inp.Tmix)+' °C',null,9);
+  // ---- низ: узлы окислителя и топливной смеси → идеальный смеситель → в FHE снизу ----
+  s+=svgBx(280,600,150,34)+svgTx(355,622,'#39c5cf','Окислитель (O₂+N₂)',null,11,'600')
+    +svgTx(355,648,'#8b949e',F.mx.mOx.toFixed(2)+' кг/с · O₂ '+(100*F.inp.wO2).toFixed(1)+'% масс · '+T(F.inp.Tmix)+' °C',null,9);
+  s+=svgBx(470,600,160,34)+svgTx(550,622,'#2ec27e','Топл. смесь (CH₄+N₂)',null,11,'600')
+    +svgTx(550,648,'#8b949e',F.mx.mFuel.toFixed(2)+' кг/с (CH₄ 93% мол.) · '+T(F.inp.Tmix)+' °C',null,9);
   s+=svgBx(375,530,150,34)+svgTx(450,552,'#e6edf3','Идеальный смеситель',null,11,'600');
-  s+=ln(370,600,420,568,'#39c5cf','fc')+ln(530,600,480,568,'#2ec27e','fg');
+  s+=ln(370,600,420,568,'#39c5cf','fc')+ln(535,600,483,568,'#2ec27e','fg');
   s+=ln(450,530,450,484,'#e0a83b','fa')
-    +svgTx(462,505,'#e0a83b','топл. смесь','start',10,'600')
-    +svgTx(462,519,'#e0a83b',F.mx.mMix.toFixed(2)+' кг/с · α='+F.inp.alpha+' · '+T(F.inp.Tmix)+' °C','start',9);
-  s+=svgTx(30,660,'#8b949e','газ: снизу вверх (смеситель→FHE→узел→CHE→труба) · масло: сверху (вход→CHE→узел→FHE→выход вверху FHE)','start',10);
+    +svgTx(462,505,'#e0a83b','смесь на горение','start',10,'600')
+    +svgTx(462,519,'#e0a83b',F.mx.mMix.toFixed(2)+' кг/с · стехиометрия · '+T(F.inp.Tmix)+' °C','start',9);
+  s+=svgTx(30,660,'#8b949e','газ: снизу вверх (смеситель→FHE→узел→CHE→труба) · масло: сверху (вход→CHE→узел→FHE→выход вверху FHE) · эталон — режим 714','start',10);
   return s+'</svg>';
 }
 

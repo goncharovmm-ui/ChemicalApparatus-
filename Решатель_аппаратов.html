@@ -63,6 +63,7 @@
     <div class="tab" id="tab-chain" onclick="setMode('chain')">Связка (цепочка)</div>
     <div class="tab" id="tab-props" onclick="setMode('props')">Свойства потоков</div>
     <div class="tab" id="tab-summary" onclick="setMode('summary')">Сводка по аппарату</div>
+    <div class="tab" id="tab-sandbox" onclick="setMode('sandbox')">Песочница</div>
   </div>
 </header>
 
@@ -287,6 +288,42 @@
     <h3>Таблица 3 · Теплоотдача в окружающую среду (α зависит от T воздуха)</h3>
     <div class="card" style="overflow-x:auto"><div id="sm_ext"></div></div>
     <div class="note" id="sm_note" style="margin-top:8px"></div>
+  </main>
+</div>
+
+<!-- ============ РЕЖИМ: ПЕСОЧНИЦА ============ -->
+<div class="wrap hide" id="view-sandbox">
+  <aside class="side">
+    <h3>Блоки</h3>
+    <div class="row3">
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('CHE')">+ CHE</button></div>
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('FHE')">+ FHE</button></div>
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('HRU')">+ HRU</button></div>
+    </div>
+    <div class="row3" style="margin-top:6px">
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('EOH')">+ EOH</button></div>
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('MIX')">+ Смеситель</button></div>
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('PUMP')">+ Насос</button></div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('SRC')">+ Источник</button></div>
+      <div><button class="run sec" style="margin:0" onclick="sbAdd('SNK')">+ Сток</button></div>
+    </div>
+    <button class="run" onclick="sbSolve()">▶ Рассчитать схему</button>
+    <div class="note" id="sb_status"></div>
+    <h3 id="sb_ptitle">Выбранный блок</h3>
+    <div id="sb_panel" class="note">Кликните по блоку на холсте — здесь появятся его параметры.</div>
+    <div class="note" style="margin-top:10px">Соединение: потяните за точку порта и отпустите
+      на точке порта другого блока (выход→вход). Бросили в пустоту — точка порта переедет туда
+      (стрелка всегда упирается в блок перпендикулярно). Клик по линии — удалить связь.
+      <b>Расход считается из сопротивлений</b>: подбирается так, чтобы сумма перепадов давления
+      каналов по пути равнялась P источника − P стока (HRU и EOH — калиброванные модели ΔP,
+      CHE/FHE — настраиваемые K·ṁ²). Замкнутый контур требует насоса (напор = сумма потерь).</div>
+  </aside>
+  <main class="main">
+    <div class="card" style="padding:6px"><svg id="sbCanvas" viewBox="0 0 1400 760" style="width:100%;height:auto;display:block;touch-action:none;user-select:none;cursor:default"></svg></div>
+    <h3 id="sb_stitle" class="hide">Сенсоры выбранного аппарата</h3>
+    <div class="card hide" id="sb_sens_card"><div id="sb_sensors"></div></div>
   </main>
 </div>
 
@@ -1576,16 +1613,470 @@ function renderSummary(){
       +'В Таблице 2 — потоки и сверка выхода масла/газа с контрольными значениями (bc.ref), ☑ — в пределах 5 %.');
 }
 
+/* ===================== ПЕСОЧНИЦА: свободная сборка схемы ===================== */
+// Среды: kind определяет допустимые каналы (oil↔масляный, gas↔газовый); fr — мольный состав для горения FHE.
+const SB_MEDIA={
+ oil:      {name:'Масло THERMINOL 59', kind:'oil', M:207,   fn:T=>PHYS.oilP(T)},
+ thermolan:{name:'Термолан LT',        kind:'oil', M:244.4, fn:T=>PHYS.thermolanP(T)},
+ gas:      {name:'Дымовые газы',       kind:'gas', M:28.4,  fr:[0,0.0348,0.0695,0.7537,0,0.009], fn:T=>PHYS.gasP(T)},
+ methane:  {name:'Метан CH₄',          kind:'gas', M:16,    fr:[1,0,0,0,0,0],       fn:T=>PHYS.methaneP(T)},
+ air:      {name:'Воздух',             kind:'gas', M:28.97, fr:[0,0,0,0.79,0.21,0], fn:T=>PHYS.airP(T)},
+ fuelmix:  {name:'Топл. смесь CH₄93+N₂7', kind:'gas', M:16.84, fr:[0.93,0,0,0.07,0,0], fn:T=>PHYS.methaneP(T)},
+ mix:      {name:'Смесь газов',        kind:'gas', M:28,    fr:null, fn:T=>PHYS.gasP(T)}
+};
+// Блоки: порты (side/t/len — редактируемые пользователем), каналы вход→выход.
+const SB_DEF={
+ CHE:{w:170,h:96,label:'CHE · конвективная',app:1,ports:[
+   {key:'gas_in',dir:'in',side:'W',t:0.55,len:40},{key:'gas_out',dir:'out',side:'E',t:0.55,len:40},
+   {key:'oil_in',dir:'in',side:'N',t:0.5,len:34},{key:'oil_out',dir:'out',side:'S',t:0.5,len:34}],
+   chans:[{in:'gas_in',out:'gas_out',ch:'gas'},{in:'oil_in',out:'oil_out',ch:'oil'}]},
+ FHE:{w:170,h:96,label:'FHE · радиантная',app:1,ports:[
+   {key:'gas_in',dir:'in',side:'W',t:0.55,len:40},{key:'gas_out',dir:'out',side:'E',t:0.55,len:40},
+   {key:'oil_in',dir:'in',side:'N',t:0.5,len:34},{key:'oil_out',dir:'out',side:'S',t:0.5,len:34}],
+   chans:[{in:'gas_in',out:'gas_out',ch:'gas'},{in:'oil_in',out:'oil_out',ch:'oil'}]},
+ HRU:{w:170,h:96,label:'HRU · утилизатор',app:1,ports:[
+   {key:'gas_in',dir:'in',side:'W',t:0.55,len:40},{key:'gas_out',dir:'out',side:'E',t:0.55,len:40},
+   {key:'oil_in',dir:'in',side:'N',t:0.5,len:34},{key:'oil_out',dir:'out',side:'S',t:0.5,len:34}],
+   chans:[{in:'gas_in',out:'gas_out',ch:'gas'},{in:'oil_in',out:'oil_out',ch:'oil'}]},
+ EOH:{w:170,h:76,label:'EOH · электро',app:1,ports:[
+   {key:'oil_in',dir:'in',side:'W',t:0.5,len:40},{key:'oil_out',dir:'out',side:'E',t:0.5,len:40}],
+   chans:[{in:'oil_in',out:'oil_out',ch:'oil'}]},
+ MIX:{w:130,h:72,label:'Смеситель',ports:[
+   {key:'in1',dir:'in',side:'W',t:0.35,len:36},{key:'in2',dir:'in',side:'S',t:0.5,len:34},{key:'out',dir:'out',side:'E',t:0.5,len:36}],
+   chans:[{in:'in1',out:'out',ch:'mix'},{in:'in2',out:'out',ch:'mix'}]},
+ PUMP:{w:120,h:70,label:'Насос',ports:[
+   {key:'in',dir:'in',side:'W',t:0.5,len:36},{key:'out',dir:'out',side:'E',t:0.5,len:36}],
+   chans:[{in:'in',out:'out',ch:'pump'}]},
+ SRC:{w:150,h:88,label:'Источник',ports:[{key:'out',dir:'out',side:'E',t:0.5,len:40}],chans:[]},
+ SNK:{w:132,h:72,label:'Сток',ports:[{key:'in',dir:'in',side:'W',t:0.5,len:40}],chans:[]}
+};
+const SB_PORTNAME={gas_in:'газ',gas_out:'газ',oil_in:'масло',oil_out:'масло',in1:'вх 1',in2:'вх 2',out:'',in:''};
+let SB={blocks:[],links:[],sel:null,seq:1,drag:null,evt:false,solved:false};
+const blk=id=>SB.blocks.find(b=>b.id===id);
+const sbName=b=>SB_DEF[b.type].label.split(' ·')[0]+' №'+b.id.slice(1);
+function sbAdd(type,x,y){
+  const d=SB_DEF[type], n=SB.blocks.length;
+  const b={id:'b'+(SB.seq++),type,x:(x!=null?x:120+(n%5)*60),y:(y!=null?y:120+(n%4)*70),w:d.w,h:d.h,
+    ports:d.ports.map(p=>({...p})),warn:null,sens:null};
+  if(d.app){ // параметры аппарата: дефолты библиотеки + первый тест (как defLStat)
+    b.params={}; APPDATA.params[type].forEach(p=>b.params[p.n]=p.v);
+    const t0=APPDATA.tests[type][0];
+    if(t0)APPDATA.params[type].forEach(p=>{const v=t0.params[p.n];if(v!=null&&isFinite(v))b.params[p.n]=v;});
+    b.rgm=0;
+    if(type==='CHE'||type==='FHE')b.hyd={Kgas:0.0024,Koil:0.0023}; // K·ṁ², кПа·с²/кг² (нет модели ΔP)
+  }
+  if(type==='SRC')b.src={medium:'gas',T:585,P:103,K:0};
+  if(type==='SNK')b.snk={P:101};
+  if(type==='PUMP')b.pump={dP:350};
+  SB.blocks.push(b); SB.sel=b.id; SB.solved=false; sbPanel(); sbRender();
+  return b;
+}
+function sbDel(){if(!SB.sel)return; SB.links=SB.links.filter(l=>l.from.b!==SB.sel&&l.to.b!==SB.sel);
+  SB.blocks=SB.blocks.filter(b=>b.id!==SB.sel); SB.sel=null; SB.solved=false; sbPanel(); sbRender();}
+function sbInit(){
+  if(SB.blocks.length){return;}
+  // пример: источники газа и масла → HRU → стоки; расход считается из ΔP (у HRU обе стороны калиброваны)
+  const sg=sbAdd('SRC',70,100);  sg.src={medium:'gas',T:585,P:103,K:0};
+  const so=sbAdd('SRC',70,430);  so.src={medium:'oil',T:185.06,P:1300,K:0};
+  const h =sbAdd('HRU',560,240);
+  const kg=sbAdd('SNK',1120,110); kg.snk={P:101.5};
+  const ko=sbAdd('SNK',1120,470); ko.snk={P:1100};
+  SB.links=[{from:{b:sg.id,p:'out'},to:{b:h.id,p:'gas_in'}},{from:{b:h.id,p:'gas_out'},to:{b:kg.id,p:'in'}},
+            {from:{b:so.id,p:'out'},to:{b:h.id,p:'oil_in'}},{from:{b:h.id,p:'oil_out'},to:{b:ko.id,p:'in'}}];
+  SB.sel=h.id;
+  if(!SB.evt){SB.evt=true;
+    const cv=el('sbCanvas');
+    cv.addEventListener('pointerdown',sbDown);
+    window.addEventListener('pointermove',sbMove);
+    window.addEventListener('pointerup',sbUp);
+  }
+}
+/* --- геометрия портов: точка = граница(side,t) + len·нормаль; стрелка всегда перпендикулярна --- */
+function sbPortXY(b,p){
+  let fx,fy,nx,ny;
+  if(p.side==='N'){fx=b.x+b.w*p.t;fy=b.y;nx=0;ny=-1;}
+  else if(p.side==='S'){fx=b.x+b.w*p.t;fy=b.y+b.h;nx=0;ny=1;}
+  else if(p.side==='W'){fx=b.x;fy=b.y+b.h*p.t;nx=-1;ny=0;}
+  else{fx=b.x+b.w;fy=b.y+b.h*p.t;nx=1;ny=0;}
+  return {fx,fy,px:fx+nx*p.len,py:fy+ny*p.len,nx,ny};
+}
+function sbRepos(b,p,x,y){ // перенос точки порта: ближайшая сторона + проекция + длина
+  const cl=(v,a,z)=>Math.min(Math.max(v,a),z);
+  const rx=(x-(b.x+b.w/2))/(b.w/2), ry=(y-(b.y+b.h/2))/(b.h/2);
+  if(Math.abs(rx)>Math.abs(ry)){p.side=rx>0?'E':'W';p.t=cl((y-b.y)/b.h,0.08,0.92);p.len=cl(Math.abs(x-(rx>0?b.x+b.w:b.x)),22,95);}
+  else{p.side=ry>0?'S':'N';p.t=cl((x-b.x)/b.w,0.08,0.92);p.len=cl(Math.abs(y-(ry>0?b.y+b.h:b.y)),22,95);}
+}
+const sbPortCol=k=>k.indexOf('gas')>=0?'#e0a83b':(k.indexOf('oil')>=0?'#4ea1ff':'#3bd0d0');
+const sbStreamCol=st=>!st?'#5a6472':(SB_MEDIA[st.mkey]&&SB_MEDIA[st.mkey].kind==='oil'?'#4ea1ff':'#e0a83b');
+/* --- отрисовка --- */
+function sbRender(){
+  const cv=el('sbCanvas'); if(!cv)return;
+  let s='<defs>'
+   +'<marker id="sbA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0L10,5L0,10z" fill="#9aa7b4"/></marker>'
+   +'<marker id="sbAo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#4ea1ff"/></marker>'
+   +'<marker id="sbAg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#e0a83b"/></marker>'
+   +'<marker id="sbAn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#5a6472"/></marker></defs>';
+  // связи (кубические Безье от точки out к точке in, касательные вдоль нормалей)
+  SB.links.forEach((l,i)=>{
+    const bf=blk(l.from.b),bt=blk(l.to.b); if(!bf||!bt)return;
+    const pf=bf.ports.find(p=>p.key===l.from.p),pt=bt.ports.find(p=>p.key===l.to.p); if(!pf||!pt)return;
+    const a=sbPortXY(bf,pf),z=sbPortXY(bt,pt);
+    const k=60, col=sbStreamCol(l.stream), mk=l.stream?(SB_MEDIA[l.stream.mkey]&&SB_MEDIA[l.stream.mkey].kind==='oil'?'sbAo':'sbAg'):'sbAn';
+    s+='<path data-link="'+i+'" d="M'+a.px+','+a.py+' C'+(a.px+a.nx*k)+','+(a.py+a.ny*k)+' '+(z.px+z.nx*k)+','+(z.py+z.ny*k)+' '+z.px+','+z.py+'" fill="none" stroke="'+col+'" stroke-width="3" marker-end="url(#'+mk+')" style="cursor:pointer"/>';
+    if(l.stream){const mx=(a.px+z.px)/2,my=(a.py+z.py)/2-8;
+      s+=svgTx(mx,my,col,l.stream.T.toFixed(1)+' °C · '+l.stream.m.toFixed(2)+' кг/с',null,10,'600');}
+  });
+  // резиновая линия при протяжке
+  if(SB.drag&&SB.drag.kind==='port'&&SB.drag.moved){
+    const b=blk(SB.drag.bid),p=b.ports.find(q=>q.key===SB.drag.port),g=sbPortXY(b,p);
+    s+='<line x1="'+g.px+'" y1="'+g.py+'" x2="'+SB.drag.x+'" y2="'+SB.drag.y+'" stroke="#9aa7b4" stroke-width="2" stroke-dasharray="6 5"/>';
+  }
+  // блоки
+  SB.blocks.forEach(b=>{
+    const d=SB_DEF[b.type], sel=b.id===SB.sel;
+    const stroke=b.warn?'#e0a83b':(sel?'#4ea1ff':'#2a313c');
+    s+='<g data-bid="'+b.id+'" style="cursor:grab">';
+    s+='<rect x="'+b.x+'" y="'+b.y+'" width="'+b.w+'" height="'+b.h+'" rx="14" fill="#0c1117" stroke="'+stroke+'" stroke-width="'+(sel?2.5:1.6)+'"/>';
+    s+=svgTx(b.x+b.w/2,b.y+22,'#e6edf3',d.label,null,12,'700');
+    // подписи по типам
+    const cx=b.x+b.w/2;
+    if(b.type==='SRC'){const md=SB_MEDIA[b.src.medium];
+      s+=svgTx(cx,b.y+40,'#9aa7b4',md.name.slice(0,22),null,9)
+        +svgTx(cx,b.y+56,'#9aa7b4',b.src.T+' °C · '+b.src.P+' кПа',null,10)
+        +svgTx(cx,b.y+72,sbStreamCol({mkey:b.src.medium}),(b.out_m!=null?'ṁ = '+b.out_m.toFixed(2)+' кг/с':'ṁ — из сопротивлений'),null,10,'600');}
+    else if(b.type==='SNK'){
+      s+=svgTx(cx,b.y+42,'#9aa7b4','P = '+b.snk.P+' кПа',null,10)
+        +svgTx(cx,b.y+58,'#9aa7b4',b.in_st?(b.in_st.T.toFixed(1)+' °C · '+b.in_st.m.toFixed(2)+' кг/с'):'—',null,10);}
+    else if(b.type==='PUMP'){s+=svgTx(cx,b.y+42,'#9aa7b4','напор '+b.pump.dP+' кПа',null,10)
+        +svgTx(cx,b.y+58,'#4ea1ff',b.out_m!=null?('ṁ = '+b.out_m.toFixed(2)+' кг/с'):'',null,10,'600');}
+    else if(b.type==='MIX'){s+=svgTx(cx,b.y+44,'#9aa7b4','идеальное смешение',null,9);}
+    else{ // аппарат
+      if(b.sens){const Q=(b.sens.Q!=null?b.sens.Q:b.sens.Q_from_TEH_bundle_to_oil);
+        s+=svgTx(cx,b.y+44,'#2ec27e',(Q!=null?'Q = '+Q.toFixed(0)+' кВт':''),null,11,'600');
+        const oo=(b.sens.OIL_OUT_TEMP!=null?b.sens.OIL_OUT_TEMP:b.sens.T_out_oil),oi=(b.sens.OIL_IN_TEMP!=null?b.sens.OIL_IN_TEMP:b.sens.T_in_oil);
+        if(oo!=null)s+=svgTx(cx,b.y+62,'#9aa7b4','масло '+oi.toFixed(1)+'→'+oo.toFixed(1)+' °C',null,9);
+        if(b.sens.GAS_OUT_TEMP!=null)s+=svgTx(cx,b.y+78,'#9aa7b4','газ '+b.sens.GAS_IN_TEMP.toFixed(0)+'→'+b.sens.GAS_OUT_TEMP.toFixed(1)+' °C',null,9);}
+      else if(b.warn)s+=svgTx(cx,b.y+48,'#e0a83b',b.warn.slice(0,26),null,9);
+      else s+=svgTx(cx,b.y+48,'#5a6472','не рассчитан',null,9);
+    }
+    s+='</g>';
+    // порты: стрелка (вход: точка→граница; выход: граница→точка) + точка-ручка
+    b.ports.forEach(p=>{
+      const g=sbPortXY(b,p), col=sbPortCol(p.key);
+      const mk=p.key.indexOf('gas')>=0?'sbAg':(p.key.indexOf('oil')>=0?'sbAo':'sbA');
+      if(p.dir==='in') s+='<line x1="'+g.px+'" y1="'+g.py+'" x2="'+g.fx+'" y2="'+g.fy+'" stroke="'+col+'" stroke-width="2.4" marker-end="url(#'+mk+')"/>';
+      else s+='<line x1="'+g.fx+'" y1="'+g.fy+'" x2="'+g.px+'" y2="'+g.py+'" stroke="'+col+'" stroke-width="2.4" marker-end="url(#'+mk+')"/>';
+      const lbl=SB_PORTNAME[p.key];
+      if(lbl)s+=svgTx(g.px+(g.nx?g.nx*10:0),g.py+(g.ny?g.ny*12:-10),col,lbl,g.nx>0?'start':(g.nx<0?'end':'middle'),9);
+      s+='<circle data-bid="'+b.id+'" data-port="'+p.key+'" cx="'+g.px+'" cy="'+g.py+'" r="7" fill="#0c1117" stroke="'+col+'" stroke-width="2.4" style="cursor:crosshair"/>';
+    });
+  });
+  cv.innerHTML=s;
+}
+/* --- события мыши --- */
+function sbXY(e){const cv=el('sbCanvas'),r=cv.getBoundingClientRect();const sc=1400/r.width;
+  return {x:(e.clientX-r.left)*sc,y:(e.clientY-r.top)*sc};}
+function sbDown(e){
+  const pt=sbXY(e);
+  const pp=e.target.closest('[data-port]');
+  if(pp){SB.drag={kind:'port',bid:pp.getAttribute('data-bid'),port:pp.getAttribute('data-port'),x:pt.x,y:pt.y,moved:false};e.preventDefault();return;}
+  const lk=e.target.closest('[data-link]');
+  if(lk){SB.links.splice(+lk.getAttribute('data-link'),1);sbClearRes();sbStatus('Связь удалена.');sbRender();return;}
+  const bb=e.target.closest('[data-bid]');
+  if(bb){const b=blk(bb.getAttribute('data-bid'));SB.drag={kind:'block',bid:b.id,dx:pt.x-b.x,dy:pt.y-b.y,moved:false};e.preventDefault();return;}
+  SB.drag={kind:'bg',moved:false};
+}
+function sbMove(e){
+  if(!SB.drag)return; const pt=sbXY(e);
+  if(SB.drag.kind==='block'){const b=blk(SB.drag.bid);b.x=pt.x-SB.drag.dx;b.y=pt.y-SB.drag.dy;SB.drag.moved=true;sbRender();}
+  else if(SB.drag.kind==='port'){SB.drag.x=pt.x;SB.drag.y=pt.y;SB.drag.moved=true;sbRender();}
+}
+function sbUp(e){
+  const d=SB.drag; if(!d){return;} SB.drag=null;
+  if(d.kind==='block'){if(!d.moved){SB.sel=d.bid;sbPanel();} sbRender();return;}
+  if(d.kind==='bg'){if(!d.moved){SB.sel=null;sbPanel();sbRender();} return;}
+  if(d.kind==='port'){
+    const b=blk(d.bid),p=b.ports.find(q=>q.key===d.port);
+    if(!d.moved){SB.sel=d.bid;sbPanel();sbRender();return;}
+    // бросили на другой порт? → связь выход→вход
+    let hit=null;
+    SB.blocks.forEach(ob=>ob.ports.forEach(op=>{
+      if(ob.id===b.id&&op.key===p.key)return;
+      const g=sbPortXY(ob,op);
+      if(Math.hypot(g.px-d.x,g.py-d.y)<=16)hit={b:ob,p:op};
+    }));
+    if(hit&&hit.p.dir!==p.dir&&hit.b.id!==b.id){
+      const from=p.dir==='out'?{b:b.id,p:p.key}:{b:hit.b.id,p:hit.p.key};
+      const to  =p.dir==='out'?{b:hit.b.id,p:hit.p.key}:{b:b.id,p:p.key};
+      SB.links=SB.links.filter(l=>!(l.to.b===to.b&&l.to.p===to.p)&&!(l.from.b===from.b&&l.from.p===from.p)); // 1:1
+      SB.links.push({from,to}); sbClearRes();
+      sbStatus('Связь создана: '+sbName(blk(from.b))+' → '+sbName(blk(to.b))+'. Нажмите «Рассчитать схему».');
+    } else if(hit){ sbStatus('<span style="color:var(--bad)">Соединять нужно выход со входом.</span>'); }
+    else { sbRepos(b,p,d.x,d.y); } // перенос точки порта
+    sbRender();
+  }
+}
+function sbClearRes(){SB.solved=false;SB.blocks.forEach(b=>{b.sens=null;b.warn=null;b.out_m=null;b.in_st=null;});SB.links.forEach(l=>l.stream=null);}
+function sbStatus(h){el('sb_status').innerHTML=h;}
+/* --- панель выбранного блока (только один) --- */
+function sbPanel(){
+  const host=el('sb_panel'); if(!host)return;
+  const b=SB.sel?blk(SB.sel):null;
+  if(!b){host.innerHTML='Кликните по блоку на холсте — здесь появятся его параметры.';sbShowSensors();return;}
+  const d=SB_DEF[b.type];
+  let h='<div style="display:flex;justify-content:space-between;align-items:center"><b>'+sbName(b)+'</b>'
+    +'<button class="run sec" style="margin:0;padding:4px 10px" onclick="sbDel()">✕ удалить</button></div>';
+  if(b.type==='SRC'){
+    let opts=''; Object.keys(SB_MEDIA).forEach(k=>{if(k==='mix')return;opts+='<option value="'+k+'"'+(b.src.medium===k?' selected':'')+'>'+SB_MEDIA[k].name+'</option>';});
+    h+='<div style="margin-top:6px"><label>Среда</label><select onchange="blk(\''+b.id+'\').src.medium=this.value;sbClearRes();sbRender()">'+opts+'</select></div>'
+      +'<div class="row" style="margin-top:6px"><div><label>T, °C</label><input type="number" step="any" value="'+b.src.T+'" oninput="blk(\''+b.id+'\').src.T=parseFloat(this.value);sbClearRes();sbRender()"></div>'
+      +'<div><label>P, кПа</label><input type="number" step="any" value="'+b.src.P+'" oninput="blk(\''+b.id+'\').src.P=parseFloat(this.value);sbClearRes();sbRender()"></div></div>'
+      +'<div><label>K линии, кПа·с²/кг² (сопротивление подводки)</label><input type="number" step="any" value="'+b.src.K+'" oninput="blk(\''+b.id+'\').src.K=parseFloat(this.value);sbClearRes()"></div>'
+      +'<div class="note">Расход не задаётся: он вычисляется из сопротивлений аппаратов по пути к стоку.</div>';
+  } else if(b.type==='SNK'){
+    h+='<div style="margin-top:6px"><label>Давление среды P, кПа</label><input type="number" step="any" value="'+b.snk.P+'" oninput="blk(\''+b.id+'\').snk.P=parseFloat(this.value);sbClearRes();sbRender()"></div>'
+      +(b.in_st?'<div class="note">Пришло: '+(SB_MEDIA[b.in_st.mkey]?SB_MEDIA[b.in_st.mkey].name:b.in_st.mkey)+' · '+b.in_st.T.toFixed(1)+' °C · '+b.in_st.m.toFixed(2)+' кг/с</div>':'');
+  } else if(b.type==='PUMP'){
+    h+='<div style="margin-top:6px"><label>Напор ΔP, кПа</label><input type="number" step="any" value="'+b.pump.dP+'" oninput="blk(\''+b.id+'\').pump.dP=parseFloat(this.value);sbClearRes()"></div>'
+      +'<div class="note">Для замкнутого контура: расход находится из равенства напора сумме потерь по кольцу.</div>';
+  } else if(b.type==='MIX'){
+    h+='<div class="note" style="margin-top:6px">Идеальный смеситель: массы складываются, T — по cp-взвешенному балансу, состав — по молям. Сопротивления нет.</div>';
+  } else { // аппарат
+    let opts=''; APPDATA.tests[b.type].forEach((t,i)=>opts+='<option value="'+i+'"'+(b.rgm===i?' selected':'')+'>'+t.name+'</option>');
+    h+='<div style="margin-top:6px"><label>Режим (тест) — загрузить параметры</label><select onchange="sbLoadRgm(\''+b.id+'\',this.value)">'+opts+'</select></div>';
+    if(b.hyd)h+='<div class="row" style="margin-top:6px"><div><label>K газ, кПа·с²/кг²</label><input type="number" step="any" value="'+b.hyd.Kgas+'" oninput="blk(\''+b.id+'\').hyd.Kgas=parseFloat(this.value);sbClearRes()"></div>'
+      +'<div><label>K масло, кПа·с²/кг²</label><input type="number" step="any" value="'+b.hyd.Koil+'" oninput="blk(\''+b.id+'\').hyd.Koil=parseFloat(this.value);sbClearRes()"></div></div>'
+      +'<div class="note">У '+b.type+' нет модельного ΔP — сопротивление каналов K·ṁ² (настраивается).</div>';
+    else h+='<div class="note" style="margin-top:4px">ΔP каналов — из калиброванной модели аппарата.</div>';
+    h+='<div class="lp" style="max-height:340px;overflow:auto"><table class="atbl"><tr><th>параметр</th><th>значение</th></tr>';
+    APPDATA.params[b.type].forEach(p=>{h+='<tr><td title="'+p.d.replace(/"/g,'')+'"><code>'+p.n+'</code></td>'
+      +'<td><input type="number" step="any" style="width:90px" value="'+(b.params[p.n]==null?'':b.params[p.n])+'" oninput="blk(\''+b.id+'\').params[\''+p.n+'\']=parseFloat(this.value);sbClearRes()"></td></tr>';});
+    h+='</table></div>';
+  }
+  host.innerHTML=h; sbShowSensors();
+}
+function sbLoadRgm(bid,ri){const b=blk(bid),t=APPDATA.tests[b.type][+ri];if(!t)return;b.rgm=+ri;
+  APPDATA.params[b.type].forEach(p=>{const v=t.params[p.n];if(v!=null&&isFinite(v))b.params[p.n]=v;});
+  sbClearRes();sbPanel();sbRender();}
+function sbShowSensors(){
+  const b=SB.sel?blk(SB.sel):null, show=b&&SB_DEF[b.type].app&&b.sens;
+  el('sb_stitle').classList.toggle('hide',!show); el('sb_sens_card').classList.toggle('hide',!show);
+  if(!show)return;
+  let h='<table class="atbl"><tr><th>сенсор</th><th>описание</th><th>значение</th></tr>';
+  APPDATA.sensors[b.type].forEach(x=>{const v=b.sens[x.n];
+    h+='<tr><td><code>'+x.n+'</code></td><td>'+x.d+'</td><td>'+(v!=null&&isFinite(v)?(Math.abs(v)<10?v.toFixed(4):v.toFixed(2)):'—')+'</td></tr>';});
+  el('sb_sensors').innerHTML=h+'</table>';
+}
+/* --- гидравлика: ΔP канала при расходе m (кПа) --- */
+function sbDP(b,chan,m,Tguess,mkey){
+  if(m<=1e-9)return 0;
+  if(b.type==='MIX')return 0;
+  if(b.type==='PUMP')return -b.pump.dP;                    // напор — отрицательное «сопротивление»
+  if(b.type==='HRU'){ // зонд калиброванной модели: газ — Eu·ρv²·nRow, масло — Дарси+ζ
+    const bc={gas:{T:(chan.ch==='gas'?Tguess:450),m:(chan.ch==='gas'?m:300),fr:SB_MEDIA.gas.fr,Pin:103,Pout:101},
+              oil:{T:(chan.ch==='oil'?Tguess:200),m:(chan.ch==='oil'?m:296),Pin:1300,Pout:1100},imposed:true};
+    const s=PHYS.run('HRU',b.params,bc).sensors;
+    return chan.ch==='gas'?s.DELTA_P_GAS/1000:s.DELTA_P_OIL;
+  }
+  if(b.type==='EOH'){ // зонд: пучок ТЭН (сенсор) + клапан
+    const s=PHYS.run('EOH',b.params,{oil:{T:Tguess,m,Pin:1300,Pout:1100,fluid:(mkey==='thermolan'?'TLT':undefined)},imposed:true}).sensors;
+    return s.delta_P_oil+(b.params.coef_deltaP_Valve||0)*m*m;
+  }
+  return (chan.ch==='gas'?b.hyd.Kgas:b.hyd.Koil)*m*m;      // CHE/FHE: настраиваемое K·ṁ²
+}
+/* --- трассировка путей источник→сток и колец с насосом --- */
+function sbLinkFrom(bid,pk){return SB.links.find(l=>l.from.b===bid&&l.from.p===pk);}
+function sbLinkTo(bid,pk){return SB.links.find(l=>l.to.b===bid&&l.to.p===pk);}
+function sbTrace(){
+  const paths=[],rings=[],errs=[],pumpUsed=new Set();
+  SB.blocks.filter(b=>b.type==='SRC').forEach(src=>{
+    let l=sbLinkFrom(src.id,'out');
+    if(!l){errs.push('«'+sbName(src)+'» не подключён');return;}
+    const segs=[],links=[l],seen=new Set(); let guard=0;
+    while(l&&guard++<300){
+      const b=blk(l.to.b);
+      if(b.type==='SNK'){paths.push({src,snk:b,segs,links});return;}
+      if(b.type==='SRC'){errs.push('поток «'+sbName(src)+'» упирается в другой источник');return;}
+      const chan=(SB_DEF[b.type].chans||[]).find(c=>c.in===l.to.p);
+      if(!chan||seen.has(b.id+'|'+chan.in)){errs.push('путь «'+sbName(src)+'» зациклился');return;}
+      seen.add(b.id+'|'+chan.in); segs.push({b,chan,key:b.id+'|'+chan.in});
+      if(b.type==='PUMP')pumpUsed.add(b.id);
+      l=sbLinkFrom(b.id,chan.out); if(l)links.push(l);
+    }
+    errs.push('путь от «'+sbName(src)+'» не доходит до стока — расход не определён (подключите сток)');
+  });
+  // кольца от насосов, не задействованных в путях
+  SB.blocks.filter(b=>b.type==='PUMP'&&!pumpUsed.has(b.id)).forEach(pu=>{
+    const segs=[{b:pu,chan:SB_DEF.PUMP.chans[0],key:pu.id+'|in'}],links=[],seen=new Set([pu.id+'|in']);
+    let l=sbLinkFrom(pu.id,'out'),ok=false,guard=0; if(l)links.push(l);
+    while(l&&guard++<300){
+      const b=blk(l.to.b);
+      if(b.id===pu.id){ok=true;break;}
+      if(b.type==='SNK'||b.type==='SRC')break;
+      const chan=(SB_DEF[b.type].chans||[]).find(c=>c.in===l.to.p);
+      if(!chan||seen.has(b.id+'|'+chan.in))break;
+      seen.add(b.id+'|'+chan.in); segs.push({b,chan,key:b.id+'|'+chan.in});
+      l=sbLinkFrom(b.id,chan.out); if(l)links.push(l);
+    }
+    if(ok)rings.push({pump:pu,segs,links});
+    else errs.push('«'+sbName(pu)+'»: контур не замкнулся обратно на насос');
+  });
+  // замкнутые кольца без насоса: связи, не покрытые ни путями, ни кольцами
+  const covered=new Set(); paths.forEach(p=>p.links.forEach(l=>covered.add(l))); rings.forEach(r=>r.links.forEach(l=>covered.add(l)));
+  if(SB.links.some(l=>!covered.has(l)&&blk(l.from.b)&&blk(l.to.b)&&blk(l.from.b).type!=='SRC'))
+    errs.push('есть связи вне путей к стокам: замкнутый контур без насоса (расход неопределён — добавьте насос) или недостроенная ветка');
+  return {paths,rings,errs};
+}
+/* --- решатель: расходы из сопротивлений (Гаусс-Зейдель + бисекция), затем теплообмен --- */
+function sbSolve(){
+  sbClearRes();
+  const tr=sbTrace();
+  if(!tr.paths.length&&!tr.rings.length){sbStatus('<span style="color:var(--bad)">Нет ни одного пути источник→сток и ни одного кольца с насосом.</span>'+(tr.errs.length?'<br>'+tr.errs.join('<br>'):''));sbRender();return;}
+  const circuits=[...tr.paths.map(p=>({kind:'path',...p,m:1})),...tr.rings.map(r=>({kind:'ring',...r,m:1}))];
+  const segT=new Map();   // key → температура для свойств (обновляется тепловым проходом)
+  const segM=new Map();   // key → медиум
+  circuits.forEach(c=>{const T0=c.kind==='path'?c.src.src.T:60, mk=c.kind==='path'?c.src.src.medium:'oil';
+    c.segs.forEach(s=>{if(!segT.has(s.key))segT.set(s.key,T0);if(!segM.has(s.key))segM.set(s.key,mk);});});
+  const flowOn=key=>circuits.reduce((a,c)=>a+(c.segs.some(s=>s.key===key)?c.m:0),0);
+  function residual(c,m){ // невязка давления при расходе m этого контура
+    let drive=c.kind==='path'?(c.src.src.P-c.snk.snk.P):0, dp=0;
+    if(c.kind==='path')dp+=(c.src.src.K||0)*m*m;                       // линия источника
+    c.segs.forEach(s=>{const mm=flowOn(s.key)-c.m+m;                    // общий расход сегмента
+      dp+=sbDP(s.b,s.chan,mm,segT.get(s.key),segM.get(s.key));});
+    return drive-dp;
+  }
+  function solveFlows(){
+    for(let sweep=0;sweep<7;sweep++)circuits.forEach(c=>{
+      if(residual(c,1e-6)<=0){c.m=0;return;}                            // напора нет
+      let lo=1e-6,hi=2;while(residual(c,hi)>0&&hi<4000)hi*=2;           // экспоненциальный поиск верха
+      for(let i=0;i<48;i++){const mid=(lo+hi)/2;(residual(c,mid)>0?lo=mid:hi=mid);}
+      c.m=(lo+hi)/2;
+    });
+  }
+  function thermal(){ // прямой тепловой проход по готовности входов + tear-итерации внутри колец
+    SB.links.forEach(l=>l.stream=null);
+    SB.blocks.forEach(b=>{b.sens=null;b.warn=null;b.out_m=null;b.in_st=null;});
+    // расход каждой связи = расход сегмента, куда она входит (или контура для стока)
+    const linkM=l=>{const bt=blk(l.to.b);
+      if(bt.type==='SNK'){const c=circuits.find(c=>c.links.includes(l));return c?c.m:0;}
+      const chan=(SB_DEF[bt.type].chans||[]).find(c=>c.in===l.to.p);return chan?flowOn(bt.id+'|'+chan.in):0;};
+    tr.paths.forEach(p=>{const c=circuits.find(c=>c.kind==='path'&&c.src===p.src);
+      const l=p.links[0],md=SB_MEDIA[p.src.src.medium];
+      l.stream={mkey:p.src.src.medium,T:p.src.src.T,P:p.src.src.P-(p.src.src.K||0)*c.m*c.m,m:c.m,fr:md.fr};
+      p.src.out_m=c.m;});
+    const inStream=(b,pk)=>{const l=sbLinkTo(b.id,pk);return l?l.stream:null;};
+    function runApparat(b){ // рассчитать аппарат, когда известны входы; вернуть true при успехе
+      const chans=SB_DEF[b.type].chans;
+      const gasC=chans.find(c=>c.ch==='gas'),oilC=chans.find(c=>c.ch==='oil');
+      const gs=gasC?inStream(b,gasC.in):null, os=oilC?inStream(b,oilC.in):null;
+      const gl=gasC?sbLinkTo(b.id,gasC.in):null, ol=oilC?sbLinkTo(b.id,oilC.in):null;
+      if(gasC&&gl&&!gs)return false; if(oilC&&ol&&!os)return false;     // вход подключён, но поток ещё не известен
+      if(b.type==='EOH'){
+        if(!os){b.warn='нет потока масла';return true;}
+        if(SB_MEDIA[os.mkey].kind!=='oil'){b.warn='в масляный канал попал не-масляный поток';return true;}
+        const r=PHYS.run('EOH',b.params,{oil:{T:os.T,m:os.m,Pin:os.P,Pout:os.P-50,fluid:(os.mkey==='thermolan'?'TLT':undefined)},imposed:true});
+        b.sens=r.sensors;
+        const dp=r.sensors.delta_P_oil+(b.params.coef_deltaP_Valve||0)*os.m*os.m;
+        const out=sbLinkFrom(b.id,oilC.out);
+        if(out)out.stream={mkey:os.mkey,T:r.sensors.T_out_oil,P:os.P-dp,m:os.m,fr:os.fr};
+        segT.set(b.id+'|'+oilC.in,(os.T+r.sensors.T_out_oil)/2);
+        return true;
+      }
+      // CHE/FHE/HRU: нужны оба потока
+      if(!gs||!os){b.warn=!gs&&!os?'не подключены потоки':(!gs?'нет газового потока':'нет масляного потока');
+        // транзит того, что есть, без теплообмена
+        [[gasC,gs],[oilC,os]].forEach(([c,st])=>{if(c&&st){const out=sbLinkFrom(b.id,c.out);if(out)out.stream={...st};}});
+        return true;}
+      if(SB_MEDIA[gs.mkey].kind!=='gas'){b.warn='в газовый канал попал '+SB_MEDIA[gs.mkey].name;return true;}
+      if(SB_MEDIA[os.mkey].kind!=='oil'){b.warn='в масляный канал попал '+SB_MEDIA[os.mkey].name;return true;}
+      const r=PHYS.run(b.type,b.params,{gas:{T:gs.T,m:gs.m,fr:gs.fr||SB_MEDIA.gas.fr,Pin:gs.P,Pout:gs.P-2},
+        oil:{T:os.T,m:os.m,Pin:os.P,Pout:os.P-200,fluid:(os.mkey==='thermolan'?'TLT':undefined)},imposed:true});
+      b.sens=r.sensors;
+      const dpg=(r.sensors.DELTA_P_GAS!=null?r.sensors.DELTA_P_GAS/1000:(b.hyd?b.hyd.Kgas*gs.m*gs.m:0));
+      const dpo=(r.sensors.DELTA_P_OIL!=null?r.sensors.DELTA_P_OIL:(b.hyd?b.hyd.Koil*os.m*os.m:0));
+      const go=sbLinkFrom(b.id,gasC.out),oo=sbLinkFrom(b.id,oilC.out);
+      if(go)go.stream={mkey:gs.mkey,T:r.sensors.GAS_OUT_TEMP,P:gs.P-dpg,m:gs.m,fr:gs.fr};
+      if(oo)oo.stream={mkey:os.mkey,T:(r.sensors.OIL_OUT_TEMP!=null?r.sensors.OIL_OUT_TEMP:os.T),P:os.P-dpo,m:os.m,fr:os.fr};
+      segT.set(b.id+'|'+gasC.in,(gs.T+r.sensors.GAS_OUT_TEMP)/2);
+      segT.set(b.id+'|'+oilC.in,(os.T+(r.sensors.OIL_OUT_TEMP||os.T))/2);
+      segM.set(b.id+'|'+oilC.in,os.mkey);
+      return true;
+    }
+    function step(){ // один обход по готовности; true если что-то посчитали
+      let done=false;
+      SB.blocks.forEach(b=>{
+        if(b.type==='SRC'||b.type==='SNK')return;
+        if(b.type==='PUMP'){const st=inStream(b,'in'),out=sbLinkFrom(b.id,'out');
+          if(st&&out&&!out.stream){out.stream={...st,P:st.P+b.pump.dP};b.out_m=st.m;done=true;}return;}
+        if(b.type==='MIX'){const s1=inStream(b,'in1'),s2=inStream(b,'in2'),out=sbLinkFrom(b.id,'out');
+          const l1=sbLinkTo(b.id,'in1'),l2=sbLinkTo(b.id,'in2');
+          if(!out||out.stream)return;
+          if((l1&&!s1)||(l2&&!s2))return;
+          const ss=[s1,s2].filter(Boolean); if(!ss.length)return;
+          if(ss.length===1){out.stream={...ss[0]};done=true;return;}
+          const m=s1.m+s2.m, cp1=SB_MEDIA[s1.mkey].fn(s1.T+273.15).cp, cp2=SB_MEDIA[s2.mkey].fn(s2.T+273.15).cp;
+          const T=(s1.m*cp1*s1.T+s2.m*cp2*s2.T)/Math.max(s1.m*cp1+s2.m*cp2,TINY);
+          const n1=s1.m/SB_MEDIA[s1.mkey].M,n2=s2.m/SB_MEDIA[s2.mkey].M,nT=n1+n2;
+          const f1=s1.fr||[0,0,0,1,0,0],f2=s2.fr||[0,0,0,1,0,0];
+          const fr=f1.map((v,i)=>(n1*v+n2*(f2[i]||0))/nT);
+          out.stream={mkey:(s1.mkey===s2.mkey?s1.mkey:'mix'),T,P:Math.min(s1.P,s2.P),m,fr};done=true;return;}
+        if(SB_DEF[b.type].app&&!b.sens&&!b.warn){
+          const before=b.sens||b.warn; if(runApparat(b)&&(b.sens||b.warn)!==before)done=true;}
+      });
+      return done;
+    }
+    for(let i=0;i<SB.blocks.length+4;i++){if(!step())break;}
+    // кольца: tear на выходе насоса, итерации с под-релаксацией
+    tr.rings.forEach((ring,ri)=>{
+      const c=circuits.find(x=>x.kind==='ring'&&x.pump===ring.pump);
+      const outL=sbLinkFrom(ring.pump.id,'out'); if(!outL||c.m<=1e-6){ring.pump.warn=c&&c.m<=1e-6?'напора не хватает: расход 0':null;return;}
+      let T=60,ok=false;
+      for(let it=0;it<60;it++){
+        outL.stream={mkey:'oil',T,P:1300,m:c.m,fr:null};
+        ring.pump.out_m=c.m;
+        // очистить внутренние результаты кольца и прогнать вперёд
+        ring.segs.forEach(s=>{if(SB_DEF[s.b.type].app){s.b.sens=null;s.b.warn=null;}});
+        for(let k=0;k<ring.segs.length+2;k++)step();
+        const back=sbLinkTo(ring.pump.id,'in');
+        const Tret=back&&back.stream?back.stream.T:null;
+        if(Tret==null){ring.pump.warn='кольцо не прошло (нет встречного потока?)';break;}
+        if(Math.abs(Tret-T)<0.01){ok=true;break;}
+        T=T+0.5*(Tret-T);
+      }
+      ring.conv=ok;
+    });
+    // стоки
+    SB.blocks.filter(b=>b.type==='SNK').forEach(b=>{const l=sbLinkTo(b.id,'in');b.in_st=l?l.stream:null;});
+  }
+  // внешние итерации: гидравлика ↔ теплообмен (свойства зависят от T)
+  for(let outer=0;outer<3;outer++){solveFlows();thermal();}
+  SB.solved=true;
+  // статус
+  let st=[];
+  tr.paths.forEach(p=>{const c=circuits.find(c=>c.kind==='path'&&c.src===p.src);
+    st.push((c.m>1e-6?'✓':'<span style="color:var(--bad)">✗</span>')+' '+sbName(p.src)+' → '+sbName(p.snk)+': ṁ = <b>'+c.m.toFixed(3)+' кг/с</b> (из сопротивлений; ΔP='+(p.src.src.P-p.snk.snk.P).toFixed(1)+' кПа)'+(c.m<=1e-6?' — напора не хватает':''));});
+  tr.rings.forEach(r=>{const c=circuits.find(c=>c.kind==='ring'&&c.pump===r.pump);
+    st.push((r.conv?'✓':'<span style="color:var(--bad)">✗ не сошлось</span>')+' кольцо через «'+sbName(r.pump)+'»: ṁ = <b>'+c.m.toFixed(3)+' кг/с</b> (напор '+r.pump.pump.dP+' кПа = потери)'
+      +(r.conv?'':' — у кольца нет стационара: проверьте, есть ли в нём отвод тепла (например, HRU с холодным газом)'));});
+  tr.errs.forEach(e=>st.push('<span style="color:#e0a83b">⚠ '+e+'</span>'));
+  SB.blocks.forEach(b=>{if(b.warn)st.push('<span style="color:#e0a83b">⚠ '+sbName(b)+': '+b.warn+'</span>');});
+  sbStatus(st.join('<br>')||'Готово.');
+  sbRender(); sbPanel();
+}
+
 /* ===================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ===================== */
 function setMode(m){
   el('view-chain').classList.toggle('hide',m!=='chain');
   el('view-apps').classList.toggle('hide',m!=='apps');
   el('view-props').classList.toggle('hide',m!=='props');
   el('view-summary').classList.toggle('hide',m!=='summary');
+  el('view-sandbox').classList.toggle('hide',m!=='sandbox');
   el('tab-chain').classList.toggle('on',m==='chain');
   el('tab-apps').classList.toggle('on',m==='apps');
   el('tab-props').classList.toggle('on',m==='props');
   el('tab-summary').classList.toggle('on',m==='summary');
+  el('tab-sandbox').classList.toggle('on',m==='sandbox');
+  if(m==='sandbox'){sbInit();sbRender();sbPanel();}
   if(m==='chain'){initLStat();
     if(el('topology').value==='loop')runLoop();else runChain();}
   if(m==='apps'){if(!el('a_dev').options.length){buildAppSelect();}onApp();}

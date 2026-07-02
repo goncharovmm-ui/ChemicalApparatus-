@@ -1140,14 +1140,12 @@ function idealMixer(mFuel,wO2,TmixC){
   return {mFuel,mCH4,mOx,mO2,mMix,T:TmixC,fr:[nCH4/nT,0,0,nN2/nT,nO2/nT,0],
     xO2mol:(wO2/32)/((wO2/32)+((1-wO2)/28))};
 }
-function runFurnaceChain(){
-  const inp={mFuel:parseFloat(el('f_mFuel').value)||0.9, wO2:parseFloat(el('f_wO2').value)||0.162,
-    Tmix:parseFloat(el('f_Tmix').value)||20, Toil:parseFloat(el('f_Toil').value)||192.2, mOil:parseFloat(el('f_mOil').value)||208.33};
+// решение связки ОПГМ (смеситель → FHE → CHE) при заданных топливе/окислителе/масле:
+// фикс-точка по температуре узла масла (масло CHE→FHE, газ FHE→CHE — противоток по аппаратам)
+function solveOPGM(inp){
   const pF=Object.assign({},...APPDATA.params.FHE.map(p=>({[p.n]:p.v})),OPGM_F);
   const pC=Object.assign({},...APPDATA.params.CHE.map(p=>({[p.n]:p.v})),OPGM_C);
-  const mx=idealMixer(inp.mFuel,inp.wO2,inp.Tmix);
-  el('f_mOx').value=mx.mOx.toFixed(2);
-  // фикс-точка по температуре узла масла: масло CHE→FHE, газ FHE→CHE (противоток по аппаратам)
+  const mx=idealMixer(inp.mFuel,inp.wO2!=null?inp.wO2:0.162,inp.Tmix!=null?inp.Tmix:20);
   let ToilNode=inp.Toil+20, rF=null, rC=null, iters=0;
   for(let it=0;it<60;it++){iters=it+1;
     rF=PHYS.run('FHE',pF,{gas:{T:mx.T,m:mx.mMix,fr:mx.fr,Pin:103,Pout:101},oil:{T:ToilNode,m:inp.mOil,Pin:1300,Pout:1100}});
@@ -1156,6 +1154,13 @@ function runFurnaceChain(){
     if(Math.abs(Tn-ToilNode)<1e-4){ToilNode=Tn;break;}
     ToilNode=0.5*ToilNode+0.5*Tn;
   }
+  return {mx,rF,rC,ToilNode,iters};
+}
+function runFurnaceChain(){
+  const inp={mFuel:parseFloat(el('f_mFuel').value)||0.9, wO2:parseFloat(el('f_wO2').value)||0.162,
+    Tmix:parseFloat(el('f_Tmix').value)||20, Toil:parseFloat(el('f_Toil').value)||192.2, mOil:parseFloat(el('f_mOil').value)||208.33};
+  const R=solveOPGM(inp), mx=R.mx, rF=R.rF, rC=R.rC, ToilNode=R.ToilNode, iters=R.iters;
+  el('f_mOx').value=mx.mOx.toFixed(2);
   const sF=rF.sensors, sC=rC.sensors;
   const F={mx,inp,iters,Tflame:rF.extra['T_пламени,°C'],Qcomb:rF.extra['Q_сгор,кВт'],Qrad:rF.extra['Q_рад,кВт'],
     TgasNode:sF.GAS_OUT_TEMP, ToilNode, Tstack:sC.GAS_OUT_TEMP, ToilOut:sF.OIL_OUT_TEMP,
@@ -1402,6 +1407,7 @@ function summCols(app){
 }
 function buildSummarySelect(){const s=el('sm_dev');if(s.options.length)return;
   APP_LIST.forEach(a=>{if(!APPDATA.params[a])return;const o=document.createElement('option');o.value=a;o.textContent=APP_TITLE[a]||a;s.appendChild(o);});
+  const oo=document.createElement('option');oo.value='OPGM';oo.textContent='ОПГМ — печь (смеситель + FHE + CHE)';s.appendChild(oo);
   if([...s.options].some(o=>o.value==='HRU'))s.value='HRU';}  // по умолчанию — утилизатор (паспортная таблица)
 function fmtNum(v,d){return (v==null||!isFinite(v))?'—':(Math.abs(v)>=1000?v.toFixed(0):v.toFixed(d));}
 // параметры физики/коррекции (задаются по тестам); всё остальное (кроме требуемой площади) — геометрия аппарата
@@ -1418,8 +1424,67 @@ const SUMM_EXT={
  EOH:[]};
 // вычисленная/требуемая площадь теплообмена по аппарату (сенсоры модели)
 const SUMM_AREA={HRU:{sensor:'ID_SENSOR_sSideCC',req:'S_FIN_REQ',dev:'S_FIN_DEV'}};
+// тесты ОПГМ — 5 вариантов работы из чертежа пускового нагревателя (модель — связка ОПГМ solveOPGM).
+// топливо = Q/(η·LHV_эфф модели): модель сжигает CH₄ при 50 МДж/кг → LHV_эфф смеси 44.18 МДж/кг.
+const OPGM_SUMM_TESTS=(()=>{const LHVe=0.8836*50000;
+  return [
+   {name:'110 % от расчётного (режим 714)',Qref:37840,eta:87.9,Toil:192.2,mOil:825000/3600,node:212.8,gasRad:675,stack:226},
+   {name:'Расчётный (режим 714)',          Qref:34400,eta:88.1,Toil:192.2,mOil:750000/3600,node:212.0,gasRad:650,stack:220},
+   {name:'Расчётный (альтернативный 1)',   Qref:34400,eta:87.7,Toil:192.8,mOil:694949.2/3600,node:212.2,gasRad:655,stack:222,alt:true},
+   {name:'110 % от расч. (альтернативный 2)',Qref:41180,eta:87.5,Toil:186.4,mOil:764444.12/3600,node:209.5,gasRad:700,stack:226,alt:true},
+   {name:'Расчётный (альтернативный 2)',   Qref:37440,eta:87.8,Toil:186.4,mOil:694949.2/3600,node:208.5,gasRad:675,stack:220,alt:true}
+  ].map(t=>({...t,mFuel:t.Qref/(t.eta/100*LHVe),out:262.0}));})();
+function renderSummaryOPGM(){
+  const dv=(m,r)=>100*(m-r)/r;
+  const cell=(m,r,d,cnt)=>{const e=dv(m,r),ok=Math.abs(e)<=5;
+    return '<td'+(cnt?' style="color:'+(ok?'#2ec27e':'#e0736b')+(ok?'':';font-weight:600')+'"':'')+'>'+m.toFixed(d)
+      +'<br><span style="font-size:11px;color:'+(cnt?(ok?'#2ec27e':'#e0736b'):'var(--muted)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'% (эт '+r.toFixed(d)+')</span></td>';};
+  const RES=OPGM_SUMM_TESTS.map(t=>({t,r:solveOPGM({mFuel:t.mFuel,Toil:t.Toil,mOil:t.mOil})}));
+  // ---- Таблица 1: геометрия (единая, из чертежа) + площади ----
+  const s0=RES[0].r, sF0=s0.rF.sensors, sC0=s0.rC.sensors;
+  const gRow=(n,v,u)=>'<tr><td><code>'+n+'</code></td><td>'+v+'</td><td>'+u+'</td></tr>';
+  let g='<table class="atbl"><tr><th>параметр (чертёж ОПГМ)</th><th>значение</th><th>ед.</th></tr>'
+    +gRow('трубы',' ∅219×8 (d_вн=0.203, δ=0.008)','м')+gRow('потоков масла','4','—')
+    +gRow('радиация: труб / длина','56 (14/поток) / 27.99','шт / м')
+    +gRow('конвекция: гладких + оребрённых / длина','28 + 88 / 10.79','шт / м')
+    +gRow('рёбра: шаг / высота / толщина','240 / 0.035 / 0.0012','шт·м⁻¹ / м / м')
+    +gRow('коэффициент оребрения ψ','9.36','—');
+  const aRow=(name,mod,ref)=>{const e=dv(mod,ref);return '<tr><td style="text-align:left">'+name+'</td><td>'+mod.toFixed(1)+'</td><td>'+ref.toFixed(1)+'</td><td style="color:'+(Math.abs(e)<=1?'#2ec27e':'#e0736b')+';font-weight:600">'+(e>=0?'+':'')+e.toFixed(2)+' %</td></tr>';};
+  g+='</table><table class="atbl" style="margin-top:8px"><tr><th>Площадь теплоотдачи</th><th>модель, м²</th><th>чертёж, м²</th><th>откл.</th></tr>'
+    +aRow('Радиантная часть',sF0.sSideRC,999.5)+aRow('Конвективная: гладкие',sC0.sSideSMCCP,192.6)+aRow('Конвективная: оребрённые',sC0.sSideCORCC,5666.6)+'</table>';
+  el('sm_geom').innerHTML=g;
+  // ---- Таблица 2: 5 вариантов работы ----
+  let h='<table class="atbl"><tr><th>Вариант работы</th><th>топл.смесь<br>кг/с</th><th>окислитель<br>кг/с</th><th>масло<br>кг/с</th><th>Т масла вх<br>°C</th>'
+    +'<th>после конвекции<br>°C</th><th>выход<br>°C</th><th>Q маслу<br>МВт</th><th>газ из радиации<br>°C</th><th>газ из печи<br>°C</th><th>КПД<br>%</th><th>Тест<br>пройден</th></tr>';
+  let nPass=0;
+  RES.forEach(({t,r})=>{const sF=r.rF.sensors,sC=r.rC.sensors;
+    const Q=(sF.Q+sC.Q), eta=100*Q/r.rF.extra['Q_сгор,кВт'];
+    const devs=[dv(r.ToilNode,t.node),dv(sF.OIL_OUT_TEMP,t.out),dv(Q,t.Qref)].map(Math.abs);
+    const ok=devs.every(x=>x<=5); if(ok)nPass++;
+    h+='<tr><td style="text-align:left">'+t.name+(t.alt?' <span style="color:var(--muted);font-size:10px">(Thermolan LT)</span>':'')+'</td>'
+      +'<td>'+t.mFuel.toFixed(3)+'</td><td>'+r.mx.mOx.toFixed(2)+'</td><td>'+t.mOil.toFixed(1)+'</td><td>'+t.Toil.toFixed(1)+'</td>'
+      +cell(r.ToilNode,t.node,1,1)+cell(sF.OIL_OUT_TEMP,t.out,1,1)+cell(Q/1000,t.Qref/1000,2,1)
+      +cell(sF.GAS_OUT_TEMP,t.gasRad,0,0)+cell(sC.GAS_OUT_TEMP,t.stack,0,0)+cell(eta,t.eta,1,0)
+      +'<td>'+(ok?'<span style="color:#2ec27e;font-size:20px">☑</span>':'<span style="color:#e0736b;font-weight:600">☐ Δ'+Math.max(...devs).toFixed(1)+'%</span>')+'</td></tr>';});
+  h+='</table>'; el('sm_table').innerHTML=h;
+  el('sm_ext').innerHTML='<div class="note">Теплопотери камер — через изоляцию стен FHE/CHE (параметры alphaAtmRC/CC в моделях камер); отдельной таблицы для связки нет.</div>';
+  el('sm_kpis').innerHTML='<div class="kpi"><b>ОПГМ</b><span>печь: смеситель + FHE + CHE</span></div>'
+    +'<div class="kpi"><b>'+OPGM_SUMM_TESTS.length+'</b><span>вариантов работы (чертёж)</span></div>'
+    +'<div class="kpi"><b>'+nPass+'/'+OPGM_SUMM_TESTS.length+'</b><span>тестов пройдено (≤5 %)</span></div>'
+    +'<div class="kpi"><b>'+sF0.sSideRC.toFixed(0)+' / '+sC0.sSideCORCC.toFixed(0)+' м²</b><span>площади: радиация / оребрённая конвекция</span></div>';
+  el('sm_note').innerHTML='Тесты ОПГМ считаются <b>моделью связки</b> (идеальный смеситель: топл. смесь CH₄ 93 %+N₂ 7 % '
+    +'+ окислитель O₂ 16.2 % масс по стехиометрии → FHE → CHE, фикс-точка узла масла). '
+    +'Расход топлива задан из паспорта: m = Q/(η·LHV_эфф), LHV_эфф модели 44.18 МДж/кг смеси '
+    +'(модель сжигает CH₄ при 50 МДж/кг; паспортная LHV 48.51 МДж/кг включает этан и пр.). '
+    +'<b>Зачёт (☑)</b> — масло после конвекции, масло на выходе и Q маслу в пределах 5 %. '
+    +'Температуры газа (радиация/труба) и КПД показаны справочно: 0d-модель распределяет тепло радиация/конвекция '
+    +'с точностью ~10 %, а КПД модели выше паспортного из-за LHV_эфф. Альтернативные режимы в паспорте — '
+    +'на масле Thermolan LT, модель считает THERMINOL 59 (отклонение объяснимо).';
+}
 function renderSummary(){
-  const app=el('sm_dev').value, tests=APPDATA.tests[app]||[], params=APPDATA.params[app]||[];
+  const app=el('sm_dev').value;
+  if(app==='OPGM'){renderSummaryOPGM();return;}
+  const tests=APPDATA.tests[app]||[], params=APPDATA.params[app]||[];
   const physSet=new Set(SUMM_PHYS[app]||[]), extSet=new Set(SUMM_EXT[app]||[]);
   const valOf=(t,p)=>{const v=t.params&&t.params[p.n];return (v!=null)?v:p.v;};
   const geomP=params.filter(p=>!physSet.has(p.n)&&!extSet.has(p.n)&&p.n!=='sFinTotalCC'), physP=params.filter(p=>physSet.has(p.n)&&!extSet.has(p.n)), extP=params.filter(p=>extSet.has(p.n));
